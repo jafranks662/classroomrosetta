@@ -17,16 +17,19 @@
 import {Injectable, inject, OnDestroy} from '@angular/core';
 import {
   user, // Observable stream of the current user
+  Auth // Firebase Auth instance
+} from '@angular/fire/auth';
+import {
   User, // Firebase User interface
-  Auth, // Firebase Auth instance
   signOut, // Firebase sign out function
   GoogleAuthProvider, // Google Auth provider
-  signInWithPopup, // Sign in method
+  signInWithRedirect, // Sign in method
+  getRedirectResult, // Retrieves the completed redirect sign-in
   browserSessionPersistence, // Persistence type
   UserCredential, // Type for sign-in result
   setPersistence, // Function to set persistence
   OAuthCredential // Type for OAuth credential
-} from '@angular/fire/auth';
+} from 'firebase/auth';
 import {Observable, Subscription, BehaviorSubject} from 'rxjs';
 
 // Define scopes required for Google APIs
@@ -39,7 +42,7 @@ const SCOPES = [
   "https://www.googleapis.com/auth/classroom.coursework.me",
   "https://www.googleapis.com/auth/classroom.courseworkmaterials",
   "https://www.googleapis.com/auth/classroom.coursework.students",
-  "https://www.googleapis.com/auth/script.external_request"
+  "https://www.googleapis.com/auth/forms.body"
 ];
 
 // Keys for storing Google OAuth Access Token and its expiration time in session storage
@@ -94,6 +97,7 @@ export class AuthService implements OnDestroy {
 
     // Attempt to load the Google access token and its expiry from session storage on service initialization
     this.loadTokenFromStorage();
+    void this.handleRedirectResult();
 
     // Subscribe to Firebase auth state changes
     this.userSubscription = user(this.auth).subscribe(firebaseUser => {
@@ -139,33 +143,12 @@ export class AuthService implements OnDestroy {
       provider.addScope(scope);
     });
 
-    console.log("AuthService: Attempting Google Sign-In via popup...");
+    console.log("AuthService: Attempting Google Sign-In via redirect...");
     try {
       await setPersistence(this.auth, browserSessionPersistence);
-      console.log("AuthService: Ensured session persistence is set before popup.");
-
-      const result: UserCredential = await signInWithPopup(this.auth, provider);
-      const firebaseUser = result.user;
-      console.log("AuthService: Google Sign-In successful for Firebase user:", firebaseUser.uid);
-
-      const credential = GoogleAuthProvider.credentialFromResult(result) as OAuthCredential | null;
-
-      if (credential?.accessToken) {
-        this.googleAccessToken = credential.accessToken;
-
-        // We use the default expiry time (1 hour).
-        const expiresInSeconds = DEFAULT_TOKEN_EXPIRY_SECONDS;
-        console.log(`AuthService: Using default token expiry: ${expiresInSeconds}s`);
-
-        this.googleAccessTokenExpiresAt = Date.now() + expiresInSeconds * 1000;
-        this.saveTokenToStorage(this.googleAccessToken, this.googleAccessTokenExpiresAt);
-        this.scheduleTokenRefresh(); // Schedule refresh for the new token
-        console.log("AuthService: New Google Access Token obtained, stored, and refresh scheduled. Expires at:", new Date(this.googleAccessTokenExpiresAt).toISOString());
-      } else {
-        console.warn("AuthService: Could not retrieve Google credential or access token from sign-in result.");
-        this.clearGoogleToken();
-      }
-      return firebaseUser;
+      console.log("AuthService: Ensured session persistence is set before redirect.");
+      await signInWithRedirect(this.auth, provider);
+      return null;
 
     } catch (error: any) {
       console.error("AuthService: Error signing in with Google: ", error.code, error.message);
@@ -210,6 +193,31 @@ export class AuthService implements OnDestroy {
   }
 
   // --- Private Helper Methods ---
+
+  private async handleRedirectResult(): Promise<void> {
+    try {
+      const result: UserCredential | null = await getRedirectResult(this.auth);
+      if (!result) {
+        return;
+      }
+
+      const credential = GoogleAuthProvider.credentialFromResult(result) as OAuthCredential | null;
+      if (!credential?.accessToken) {
+        console.warn("AuthService: Redirect sign-in completed without a Google access token.");
+        this.clearGoogleToken();
+        return;
+      }
+
+      this.googleAccessToken = credential.accessToken;
+      this.googleAccessTokenExpiresAt = Date.now() + DEFAULT_TOKEN_EXPIRY_SECONDS * 1000;
+      this.saveTokenToStorage(this.googleAccessToken, this.googleAccessTokenExpiresAt);
+      this.scheduleTokenRefresh();
+      console.log("AuthService: Redirect sign-in completed and Google access token stored.");
+    } catch (error: any) {
+      console.error("AuthService: Error completing Google redirect sign-in:", error.code, error.message);
+      this.clearGoogleToken();
+    }
+  }
 
   private saveTokenToStorage(token: string, expiresAt: number): void {
     try {

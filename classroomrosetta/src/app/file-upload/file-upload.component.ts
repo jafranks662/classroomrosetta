@@ -458,7 +458,10 @@ export class FileUploadComponent {
         const qtiFileForService: ImsccFile | undefined = item.qtiFile?.[0];
         // Check if a main Doc should be created from the item's HTML description
         console.log(item)
-        const shouldCreateDocFromDescription = !qtiFileForService && !!item.descriptionForDisplay && (item.workType === 'ASSIGNMENT' || item.workType === 'SHORT_ANSWER_QUESTION') && !!item.richtext;
+        const shouldCreateDocFromDescription = !qtiFileForService &&
+          !!item.descriptionForDisplay &&
+          (item.workType === 'ASSIGNMENT' || item.workType === 'SHORT_ANSWER_QUESTION' || item.workType === 'MATERIAL') &&
+          !!item.richtext;
 
         // This list will be used by replaceLocalLinksInHtml to understand original file references.
         const allOriginalLocalFilesInfo = (item.localFilesToUpload || []).map(ftu => {
@@ -587,6 +590,9 @@ export class FileUploadComponent {
                   primaryContentCreation$ = this.qti.createFormFromQti(qtiFileForService, allPackageImsccFiles, assignmentName, itemId, assignmentFolderId)
                     .pipe(
                       tap(form => console.log(`${itemLogPrefix} QTI Form created/found.`)),
+                      switchMap(form => form
+                        ? of(form)
+                        : throwError(() => new Error('Forms converter returned no Google Form.'))),
                       catchError(qtiErr => throwError(() => ({message: `QTI to Form failed: ${qtiErr.message}`, stage: 'QTI Processing', details: qtiErr, itemId})))
                     );
                 } else if (shouldCreateDocFromDescription) {
@@ -831,6 +837,11 @@ export class FileUploadComponent {
           });
         }
         if (result.createdDoc?.id && result.createdDoc?.name && item.workType === 'SHORT_ANSWER_QUESTION') {
+          updatedItem.materials.push({
+            driveFile: {driveFile: {id: result.createdDoc.id, title: result.createdDoc.name}, shareMode: 'VIEW'}
+          });
+        }
+        if (result.createdDoc?.id && result.createdDoc?.name && item.workType === 'MATERIAL') {
           updatedItem.materials.push({
             driveFile: {driveFile: {id: result.createdDoc.id, title: result.createdDoc.name}, shareMode: 'VIEW'}
           });

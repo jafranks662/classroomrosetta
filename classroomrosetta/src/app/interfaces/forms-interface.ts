@@ -25,6 +25,7 @@ export interface GoogleForm {
   responderUri?: string; // The URL for respondents to view and submit the form. Read-only.
   linkedSheetId?: string; // The ID of the linked Google Sheet. Read-only.
   revisionId?: string; // The revision ID of the form. Read-only.
+  publishSettings?: PublishSettings;
 }
 
 /**
@@ -50,7 +51,7 @@ export interface FormItem {
   videoItem?: VideoItem;
   pageBreakItem?: PageBreakItem;
   sectionHeaderItem?: SectionHeaderItem;
-  textItem?: TextItem
+  textItem?: TextItem;
   // Add other item types like questionGroupItem, pageBreakItem, textItem, videoItem if needed.
 }
 
@@ -67,7 +68,7 @@ export interface ImageItem {
  * See: https://developers.google.com/forms/api/reference/rest/v1/forms#image
  */
 export interface Image {
-  contentUri?: string; // A URI to the image, e.g., a "data:" URI for a base64 encoded image.
+  contentUri?: string; // Output-only URI returned by Forms.
   altText?: string; // Alt text for the image.
   properties?: ImageProperties; // Properties of the image.
   sourceUri?: string;
@@ -193,7 +194,16 @@ export interface BatchUpdateFormRequest {
 export interface FormRequest {
   createItem?: CreateItemRequest; // Creates an item.
   updateSettings?: UpdateSettingsRequest; // Updates form settings (e.g., to make it a quiz).
+  updateFormInfo?: UpdateFormInfoRequest;
   // Add other request types like updateItem, deleteItem, moveItem, updateFormInfo if needed.
+}
+
+export interface UpdateFormInfoRequest {
+  info: {
+    title?: string;
+    description?: string;
+  };
+  updateMask: string;
 }
 
 /**
@@ -222,6 +232,18 @@ export interface BatchUpdateFormResponse {
   form?: GoogleForm; // The updated form, if requested.
   replies?: Response[]; // Results for each request, in order.
   writeControl?: WriteControl;
+}
+
+export interface PublishSettings {
+  publishState?: {
+    isPublished?: boolean;
+    isAcceptingResponses?: boolean;
+  };
+}
+
+export interface SetPublishSettingsRequest {
+  publishSettings: PublishSettings;
+  updateMask: 'publishState' | '*';
 }
 
 /**
@@ -350,5 +372,3 @@ export interface TextItem {
   // text: string; // The actual text content, if not using title/description of FormItem
   [key: string]: any; // Allow empty object if title/description of FormItem are used
 }
-
-

@@ -18,5 +18,11 @@ import { bootstrapApplication } from '@angular/platform-browser';
 import { appConfig } from './app/app.config';
 import { AppComponent } from './app/app.component';
 
-bootstrapApplication(AppComponent, appConfig)
-  .catch((err) => console.error(err));
+if (window.location.hostname === 'canvas-classroom-converter.web.app') {
+  const canonicalUrl = new URL(window.location.href);
+  canonicalUrl.hostname = 'canvas-classroom-converter.firebaseapp.com';
+  window.location.replace(canonicalUrl.toString());
+} else {
+  bootstrapApplication(AppComponent, appConfig)
+    .catch((err) => console.error(err));
+}

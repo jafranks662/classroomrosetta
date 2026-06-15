@@ -76,7 +76,13 @@
                       <div class="item-checkbox-placeholder"></div>
                     }
                     <strong class="item-title">{{ item.title || 'Untitled Assignment' }}</strong>
-                    <span class="item-type"> ({{ item.workType }})</span>
+                    <span class="item-type">
+                      @if (item.qtiFile && item.qtiFile.length > 0) {
+                        (GOOGLE FORM QUIZ)
+                      } @else {
+                        ({{ item.workType }})
+                      }
+                    </span>
                   </div>
 
                   @if (item.processingError) {

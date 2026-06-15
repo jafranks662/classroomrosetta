@@ -140,17 +140,22 @@ export class ConverterService {
           );
           if (rootItems.length === 0) console.warn('No <item> elements found within the organization.');
         } else console.warn('No <organization> element found within <organizations>.');
-      } else {
+      }
+
+      if (rootItems.length === 0) {
         resourcesElement = this.manifestXmlDoc.getElementsByTagNameNS(this.IMSCP_V1P1_NS, 'resources')[0]
           || this.manifestXmlDoc.getElementsByTagName('resources')[0];
         if (resourcesElement) {
           directResources = Array.from(resourcesElement.children).filter(
-            (node): node is Element => node instanceof Element && node.localName === 'resource'
+            (node): node is Element =>
+              node instanceof Element &&
+              node.localName === 'resource' &&
+              !node.getAttribute('type')?.toLowerCase().startsWith('associatedcontent/')
           );
-          if (directResources.length === 0) console.warn('Found <resources> element, but it contains no <resource> children.');
+          if (directResources.length === 0) console.warn('Found <resources> element, but it contains no standalone resources.');
         } else {
-          console.error('Manifest contains neither <organizations> nor <resources> elements. Cannot process.');
-          return throwError(() => new Error('No <organizations> or <resources> found in manifest'));
+          console.error('Manifest contains no usable organization items or resources. Cannot process.');
+          return throwError(() => new Error('No usable organization items or resources found in manifest'));
         }
       }
     } catch (error) {
@@ -218,7 +223,8 @@ export class ConverterService {
               Array.from(this.manifestXmlDoc?.getElementsByTagName('resource') || []).find(r => r.getAttribute('identifier') === identifierRef);
 
             if (resource) {
-              resourceObservable = this.processResource(resource, rawTitle, identifier, parentTopic);
+              const resolvedTopic = this.resolveCourseworkTopic(parentTopic, rawTitle);
+              resourceObservable = this.processResource(resource, rawTitle, identifier, resolvedTopic);
             } else {
               console.warn(`   Resource not found for identifierref: ${identifierRef} (Item: "${rawTitle}"). This item might be a folder or a broken link.`);
               this.skippedItemLog.push({id: identifier, title: rawTitle, reason: `Resource not found for ref: ${identifierRef}`});
@@ -251,6 +257,20 @@ export class ConverterService {
         return throwError(() => err);
       })
     );
+  }
+
+  private resolveCourseworkTopic(parentTopic: string | undefined, itemTitle: string): string | undefined {
+    if (!parentTopic || !/\bquiz\b/i.test(itemTitle)) {
+      return parentTopic;
+    }
+
+    if (/^term\s*1\b/i.test(parentTopic)) {
+      return 'T1 - QUIZZES';
+    }
+    if (/^term\s*2\b/i.test(parentTopic)) {
+      return 'T2 - QUIZZES';
+    }
+    return parentTopic;
   }
 
   private processResource(
@@ -399,7 +419,18 @@ export class ConverterService {
     }
     // END: Simplified primary file resolution
 
-    const isStandardQti = (resourceType === 'imsqti_xmlv1p2/xml' || resourceType === 'imsqti_xmlv1p2p1/imsqti_asiitem_xmlv1p2p1' || resourceType?.startsWith('application/vnd.ims.qti') || resourceType?.startsWith('assessment/x-bb-qti') || ((primaryResourceFile?.name?.toLowerCase().endsWith('.xml') || resolvedPrimaryHref?.toLowerCase().endsWith('.xml')) && resourceType?.toLowerCase().includes('qti')));
+    const normalizedResourceType = resourceType?.trim().toLowerCase() || '';
+    const isStandardQti = (
+      normalizedResourceType === 'imsqti_xmlv1p2' ||
+      normalizedResourceType === 'imsqti_xmlv1p2/xml' ||
+      normalizedResourceType === 'imsqti_xmlv1p2p1/imsqti_asiitem_xmlv1p2p1' ||
+      normalizedResourceType.startsWith('application/vnd.ims.qti') ||
+      normalizedResourceType.startsWith('assessment/x-bb-qti') ||
+      (
+        (primaryResourceFile?.name?.toLowerCase().endsWith('.xml') || resolvedPrimaryHref?.toLowerCase().endsWith('.xml')) &&
+        normalizedResourceType.includes('qti')
+      )
+    );
     const isD2lQuiz = d2lMaterialType === 'd2lquiz';
     const isDiscussionTopic = (primaryResourceFile && primaryFileXmlDoc && this.parsingHelper.isTopicXml(primaryResourceFile, primaryFileXmlDoc)) ||
       resourceType?.toLowerCase().includes('discussiontopic') ||
@@ -515,7 +546,8 @@ export class ConverterService {
     }
     else if (primaryResourceFile && (primaryResourceFile.mimeType === 'text/html' || primaryResourceFile.name.toLowerCase().endsWith('.html'))) {
       // This handles standalone HTML files
-      courseworkBase.workType = 'ASSIGNMENT'; // Or MATERIAL
+      // Canvas wiki pages are exported as standalone HTML webcontent.
+      courseworkBase.workType = 'MATERIAL';
       const htmlSourcePath = primaryResourceFile.name;
       if (typeof primaryResourceFile.data === 'string') {
         const processedHtml = this.processHtmlContent(htmlSourcePath, primaryResourceFile.data);

@@ -245,7 +245,10 @@ export class ClassroomService {
                 materials: materialChunkForPart,
                 classroomCourseWorkId: undefined,
                 classroomLink: undefined,
-                state: baseItemForProcessing.state || 'DRAFT',
+                state: 'DRAFT',
+                dueDate: undefined,
+                dueTime: undefined,
+                scheduledTime: undefined,
                 processingError: undefined,
               };
               if (numParts > 1) {
@@ -260,9 +263,8 @@ export class ClassroomService {
                   title: effectiveItemTitle,
                   description: effectiveItemForPart.descriptionForClassroom,
                   materials: materialChunkForPart,
-                  state: effectiveItemForPart.state,
+                  state: 'DRAFT',
                   topicId: topicIdValue,
-                  scheduledTime: effectiveItemForPart.scheduledTime,
                 };
               } else {
                 path = `/v1/courses/${courseId}/courseWork`;
@@ -271,14 +273,11 @@ export class ClassroomService {
                   description: effectiveItemForPart.descriptionForClassroom,
                   materials: materialChunkForPart,
                   workType: effectiveItemForPart.workType as CourseWork['workType'],
-                  state: effectiveItemForPart.state,
+                  state: 'DRAFT',
                   topicId: topicIdValue,
                   maxPoints: effectiveItemForPart.maxPoints,
                   assignment: effectiveItemForPart.workType === 'ASSIGNMENT' ? effectiveItemForPart.assignment : undefined,
                   multipleChoiceQuestion: effectiveItemForPart.workType === 'MULTIPLE_CHOICE_QUESTION' ? effectiveItemForPart.multipleChoiceQuestion : undefined,
-                  dueDate: effectiveItemForPart.dueDate,
-                  dueTime: effectiveItemForPart.dueTime,
-                  scheduledTime: effectiveItemForPart.scheduledTime,
                   submissionModificationMode: effectiveItemForPart.submissionModificationMode,
                 };
               }
