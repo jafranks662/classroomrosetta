@@ -172,12 +172,14 @@ export class QtiToFormsService {
       const promptHtml = promptElement?.textContent ? decode(promptElement.textContent) : '';
       const prompt = this.parseRichText(promptHtml, qtiFile.name, fileIndex, warnings);
       const fallbackTitle = item.getAttribute('title') || `Question ${itemIndex + 1}`;
-      const promptTitle = prompt.text || fallbackTitle;
+      const promptLabel = this.buildPromptLabel(prompt.text, fallbackTitle, itemIndex);
+      const promptDescription = this.buildPromptDescription(prompt.text, promptLabel);
 
       if (questionType === 'text_only_question') {
         items.push({
           kind: 'text',
-          title: promptTitle,
+          title: promptLabel,
+          description: promptDescription,
           image: prompt.images[0]
         });
         return;
@@ -195,7 +197,8 @@ export class QtiToFormsService {
       if (responses.length === 0) {
         items.push({
           kind: 'question',
-          title: promptTitle,
+          title: promptLabel,
+          description: promptDescription,
           question: this.textQuestion(true, sourcePoints)
         });
         return;
@@ -211,8 +214,8 @@ export class QtiToFormsService {
         const labelElement = response.querySelector(':scope > material > mattext');
         const responseLabel = this.cleanText(labelElement?.textContent || '');
         const title = isCompound
-          ? this.buildCompoundQuestionTitle(promptTitle, responseLabel, responseId, responseIndex)
-          : promptTitle;
+          ? this.buildCompoundQuestionTitle(promptLabel, responseLabel, responseId, responseIndex)
+          : promptLabel;
         const points = isCompound ? 1 : sourcePoints;
         const formItem = this.parseResponse(
           item,
@@ -227,6 +230,7 @@ export class QtiToFormsService {
         );
 
         if (formItem) {
+          formItem.description = promptDescription;
           formItem.image = prompt.images[0];
           items.push(formItem);
         } else {
@@ -239,6 +243,28 @@ export class QtiToFormsService {
       warnings.push('No convertible questions were found in this quiz.');
     }
     return {description, items, warnings};
+  }
+
+  private buildPromptLabel(promptText: string, fallbackTitle: string, itemIndex: number): string {
+    const cleanPrompt = this.cleanText(promptText);
+    const cleanFallback = this.cleanText(fallbackTitle);
+    const fallbackIsGeneric = !cleanFallback || /^question$/i.test(cleanFallback);
+    const base = cleanPrompt || cleanFallback || `Question ${itemIndex + 1}`;
+    const preferred = !fallbackIsGeneric && cleanPrompt.length > 180 ? cleanFallback : base;
+    return this.truncateText(preferred, 120) || `Question ${itemIndex + 1}`;
+  }
+
+  private buildPromptDescription(promptText: string, promptLabel: string): string | undefined {
+    const cleanPrompt = this.cleanText(promptText);
+    if (!cleanPrompt || cleanPrompt === promptLabel) return undefined;
+    return this.truncateText(cleanPrompt, 4000);
+  }
+
+  private truncateText(value: string, maxLength: number): string {
+    const clean = this.cleanText(value);
+    if (clean.length <= maxLength) return clean;
+    const truncated = clean.slice(0, Math.max(0, maxLength - 1)).trimEnd();
+    return `${truncated}...`;
   }
 
   private parseResponse(
