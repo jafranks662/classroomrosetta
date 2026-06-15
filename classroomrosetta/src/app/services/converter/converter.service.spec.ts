@@ -61,7 +61,80 @@ describe('ConverterService', () => {
     ]).pipe(toArray()).subscribe({
       next: items => {
         expect(items.length).toBe(1);
+        expect(items[0].title).toBe('Canvas Quiz');
         expect(items[0].qtiFile?.[0].name).toBe('quiz/quiz.xml');
+        done();
+      },
+      error: done.fail
+    });
+  });
+
+  it('includes unreferenced Canvas quizzes without duplicating module quizzes', done => {
+    const manifest = `<?xml version="1.0"?>
+      <manifest>
+        <organizations><organization>
+          <item identifier="module"><title>Unit 9 - Quiz</title>
+            <item identifier="quiz-item" identifierref="quiz1"><title>9.1 Quiz - DNA</title></item>
+          </item>
+        </organization></organizations>
+        <resources>
+          <resource identifier="quiz1" type="imsqti_xmlv1p2">
+            <file href="quiz1/quiz.xml"/>
+            <dependency identifierref="quiz1-meta"/>
+          </resource>
+          <resource identifier="quiz1-meta" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="quiz1/assessment_meta.xml"/>
+          <resource identifier="quiz2" type="imsqti_xmlv1p2">
+            <file href="quiz2/quiz.xml"/>
+            <dependency identifierref="quiz2-meta"/>
+          </resource>
+          <resource identifier="quiz2-meta" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="quiz2/assessment_meta.xml"/>
+          <resource identifier="quiz-image" type="webcontent" href="quiz2/question.png"/>
+        </resources>
+      </manifest>`;
+    const qti = '<questestinterop><assessment><section/></assessment></questestinterop>';
+
+    service.convertImscc([
+      {name: 'imsmanifest.xml', data: manifest, mimeType: 'text/xml'},
+      {name: 'quiz1/quiz.xml', data: qti, mimeType: 'text/xml'},
+      {name: 'quiz1/assessment_meta.xml', data: '<quiz><title>9.1 Quiz - DNA</title></quiz>', mimeType: 'text/xml'},
+      {name: 'quiz2/quiz.xml', data: qti, mimeType: 'text/xml'},
+      {name: 'quiz2/assessment_meta.xml', data: '<quiz><title>9.2 Practice - Protein Synthesis</title></quiz>', mimeType: 'text/xml'},
+      {name: 'quiz2/question.png', data: 'data:image/png;base64,AA==', mimeType: 'image/png'}
+    ]).pipe(toArray()).subscribe({
+      next: items => {
+        expect(items.length).toBe(2);
+        expect(items.filter(item => item.title === '9.1 Quiz - DNA').length).toBe(1);
+        const practice = items.find(item => item.title === '9.2 Practice - Protein Synthesis');
+        expect(practice?.associatedWithDeveloper?.topic).toBe('Unit 9 - PRACTICES');
+        done();
+      },
+      error: done.fail
+    });
+  });
+
+  it('does not expose Canvas quiz image resources as standalone coursework', done => {
+    const manifest = `<?xml version="1.0"?>
+      <manifest>
+        <organizations/>
+        <resources>
+          <resource identifier="quiz1" type="imsqti_xmlv1p2">
+            <file href="quiz/quiz.xml"/>
+            <dependency identifierref="quiz1-meta"/>
+          </resource>
+          <resource identifier="quiz1-meta" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="quiz/assessment_meta.xml"/>
+          <resource identifier="quiz-image" type="webcontent" href="quiz/question.png"/>
+        </resources>
+      </manifest>`;
+
+    service.convertImscc([
+      {name: 'imsmanifest.xml', data: manifest, mimeType: 'text/xml'},
+      {name: 'quiz/quiz.xml', data: '<questestinterop><assessment><section/></assessment></questestinterop>', mimeType: 'text/xml'},
+      {name: 'quiz/assessment_meta.xml', data: '<quiz><title>9.1 Quiz - DNA</title></quiz>', mimeType: 'text/xml'},
+      {name: 'quiz/question.png', data: 'data:image/png;base64,AA==', mimeType: 'image/png'}
+    ]).pipe(toArray()).subscribe({
+      next: items => {
+        expect(items.length).toBe(1);
+        expect(items[0].title).toBe('9.1 Quiz - DNA');
         done();
       },
       error: done.fail

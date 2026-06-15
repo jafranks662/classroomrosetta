@@ -98,6 +98,7 @@ export class ConverterService {
     let rootItems: Element[] = [];
     let resourcesElement: Element | null = null;
     let directResources: Element[] = [];
+    let unreferencedQtiResources: Element[] = [];
 
     try {
       const parser = new DOMParser();
@@ -150,13 +151,24 @@ export class ConverterService {
             (node): node is Element =>
               node instanceof Element &&
               node.localName === 'resource' &&
-              !node.getAttribute('type')?.toLowerCase().startsWith('associatedcontent/')
+              this.isPrimaryStandaloneResource(node)
           );
           if (directResources.length === 0) console.warn('Found <resources> element, but it contains no standalone resources.');
         } else {
           console.error('Manifest contains no usable organization items or resources. Cannot process.');
           return throwError(() => new Error('No usable organization items or resources found in manifest'));
         }
+      } else {
+        const referencedResourceIds = new Set(
+          Array.from(this.manifestXmlDoc.getElementsByTagName('item'))
+            .map(item => item.getAttribute('identifierref'))
+            .filter((identifierRef): identifierRef is string => !!identifierRef)
+        );
+        unreferencedQtiResources = Array.from(this.manifestXmlDoc.getElementsByTagName('resource'))
+          .filter(resource => {
+            const resourceId = resource.getAttribute('identifier');
+            return this.isQtiResource(resource) && !!resourceId && !referencedResourceIds.has(resourceId);
+          });
       }
     } catch (error) {
       console.error('Error processing IMSCC package manifest:', error);
@@ -166,22 +178,11 @@ export class ConverterService {
 
     let processingStream: Observable<ProcessedCourseWork>;
     if (rootItems.length > 0) {
-      processingStream = this.processImsccItemsStream(rootItems, undefined);
+      const moduleItemsStream = this.processImsccItemsStream(rootItems, undefined);
+      const unreferencedQtiStream = this.processStandaloneResources(unreferencedQtiResources);
+      processingStream = concat(moduleItemsStream, unreferencedQtiStream);
     } else if (directResources.length > 0) {
-      processingStream = from(directResources).pipe(
-        concatMap(resource => {
-          try {
-            const title = resource.getAttribute('title') || this.parsingHelper.extractTitleFromMetadata(resource) || 'Untitled Resource';
-            const identifier = resource.getAttribute('identifier') || `resource_${Math.random().toString(36).substring(2)}`;
-            return this.processResource(resource, title, identifier, undefined);
-          } catch (error) {
-            console.error(`Error processing direct resource (ID: ${resource.getAttribute('identifier') || 'unknown'}):`, error);
-            this.skippedItemLog.push({id: resource.getAttribute('identifier') || undefined, title: resource.getAttribute('title') || 'Unknown direct resource', reason: `Error during processing: ${error instanceof Error ? error.message : String(error)}`});
-            return EMPTY;
-          }
-        }),
-        filter((result): result is ProcessedCourseWork => result !== null)
-      );
+      processingStream = this.processStandaloneResources(directResources);
     } else {
       console.warn('No root items or direct resources found to process. Conversion will yield no results.');
       processingStream = EMPTY;
@@ -195,6 +196,111 @@ export class ConverterService {
         return throwError(() => new Error(`Error processing IMSCC content stream: ${wrappedError.message}`));
       })
     );
+  }
+
+  private processStandaloneResources(resources: Element[]): Observable<ProcessedCourseWork> {
+    if (resources.length === 0) return EMPTY;
+
+    return from(resources).pipe(
+      concatMap(resource => {
+        try {
+          const title = this.extractStandaloneResourceTitle(resource);
+          const identifier = resource.getAttribute('identifier') || `resource_${Math.random().toString(36).substring(2)}`;
+          const topic = this.isQtiResource(resource) ? this.inferStandaloneAssessmentTopic(title) : undefined;
+          return this.processResource(resource, title, identifier, topic);
+        } catch (error) {
+          const identifier = resource.getAttribute('identifier') || undefined;
+          const title = resource.getAttribute('title') || 'Unknown direct resource';
+          console.error(`Error processing direct resource (ID: ${identifier || 'unknown'}):`, error);
+          this.skippedItemLog.push({
+            id: identifier,
+            title,
+            reason: `Error during processing: ${error instanceof Error ? error.message : String(error)}`
+          });
+          return EMPTY;
+        }
+      }),
+      filter((result): result is ProcessedCourseWork => result !== null)
+    );
+  }
+
+  private isPrimaryStandaloneResource(resource: Element): boolean {
+    if (this.isQtiResource(resource)) return true;
+
+    const resourceType = resource.getAttribute('type')?.trim().toLowerCase() || '';
+    if (resourceType.startsWith('associatedcontent/')) return false;
+
+    const href = resource.getAttribute('href') ||
+      Array.from(resource.children)
+        .find(node => node instanceof Element && node.localName === 'file')
+        ?.getAttribute('href') ||
+      '';
+
+    return resourceType === 'webcontent' && /\.(html?|xml)$/i.test(href.split(/[?#]/)[0]);
+  }
+
+  private isQtiResource(resource: Element): boolean {
+    const resourceType = resource.getAttribute('type')?.trim().toLowerCase() || '';
+    return resourceType === 'imsqti_xmlv1p2' ||
+      resourceType === 'imsqti_xmlv1p2/xml' ||
+      resourceType === 'imsqti_xmlv1p2p1/imsqti_asiitem_xmlv1p2p1' ||
+      resourceType.startsWith('application/vnd.ims.qti') ||
+      resourceType.startsWith('assessment/x-bb-qti');
+  }
+
+  private extractStandaloneResourceTitle(resource: Element): string {
+    const inlineTitle = resource.getAttribute('title') || this.parsingHelper.extractTitleFromMetadata(resource);
+    if (inlineTitle?.trim()) return inlineTitle.trim();
+
+    for (const dependency of Array.from(resource.children).filter(
+      (node): node is Element => node instanceof Element && node.localName === 'dependency'
+    )) {
+      const dependencyId = dependency.getAttribute('identifierref');
+      if (!dependencyId) continue;
+      const dependencyResource = Array.from(this.manifestXmlDoc?.getElementsByTagName('resource') || [])
+        .find(candidate => candidate.getAttribute('identifier') === dependencyId);
+      const metadataTitle = dependencyResource ? this.extractTitleFromResourceFile(dependencyResource) : null;
+      if (metadataTitle) return metadataTitle;
+    }
+
+    const qtiTitle = this.extractTitleFromResourceFile(resource);
+    return qtiTitle || 'Untitled Resource';
+  }
+
+  private extractTitleFromResourceFile(resource: Element): string | null {
+    const href = resource.getAttribute('href') ||
+      Array.from(resource.children)
+        .find(node => node instanceof Element && node.localName === 'file')
+        ?.getAttribute('href');
+    if (!href) return null;
+
+    const baseHref = resource.getAttribute('xml:base');
+    const resolvedHref = this.parsingHelper.resolveRelativePath(baseHref, this.parsingHelper.tryDecodeURIComponent(href));
+    const file = resolvedHref ? this.fileMap.get(this.getFileMapKey(resolvedHref)) : null;
+    if (!file || typeof file.data !== 'string') return null;
+
+    const doc = new DOMParser().parseFromString(file.data, 'application/xml');
+    if (doc.querySelector('parsererror')) return null;
+    const titleElement = Array.from(doc.getElementsByTagName('*'))
+      .find(element => element.localName === 'title');
+    const title = titleElement?.textContent?.trim();
+    if (title) return title;
+
+    const assessment = Array.from(doc.getElementsByTagName('*'))
+      .find(element => element.localName === 'assessment');
+    return assessment?.getAttribute('title')?.trim() || null;
+  }
+
+  private inferStandaloneAssessmentTopic(title: string): string {
+    const unitMatch = title.match(/^\*?\s*(?:unit\s*)?(\d+)(?:\.\d+)*\b/i);
+    const unitPrefix = unitMatch ? `Unit ${Number(unitMatch[1])}` : 'Uncategorized';
+
+    if (/\bpractice\b/i.test(title)) return `${unitPrefix} - PRACTICES`;
+    if (/\bpreview\b/i.test(title)) return `${unitPrefix} - PREVIEWS`;
+    if (/\bquiz\b/i.test(title)) return `${unitPrefix} - QUIZZES`;
+    if (/\btest\b/i.test(title)) return `${unitPrefix} - TESTS`;
+    if (/\bcase study\b/i.test(title)) return `${unitPrefix} - CASE STUDIES`;
+    return `${unitPrefix} - ASSESSMENTS`;
   }
 
   private processImsccItemsStream(
