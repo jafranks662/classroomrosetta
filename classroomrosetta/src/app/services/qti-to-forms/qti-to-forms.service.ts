@@ -481,7 +481,8 @@ export class QtiToFormsService {
     try {
       const url = new URL(source);
       return /(^|\.)instructure\.com$/i.test(url.hostname) &&
-        (/\/assessment_questions\/.*\/files\/\d+\/download/i.test(url.pathname) ||
+        (/\/assessment_questions\/.*\/files\/\d+(?:\/download)?/i.test(url.pathname) ||
+          /\/files\/\d+(?:\/download)?/i.test(url.pathname) ||
           /\/api\/v1\/.*\/files\/\d+/i.test(url.pathname));
     } catch {
       return false;
@@ -614,6 +615,10 @@ export class QtiToFormsService {
     const sourceUri = image.file
       ? hostedImages.get(image.file.name)?.sourceUri
       : (/^https?:\/\//i.test(image.source) ? image.source : undefined);
+    if (sourceUri && this.isPrivateCanvasImageUrl(sourceUri)) {
+      console.warn(`[QTI Service] Skipping private Canvas image URL that was not resolved locally: ${sourceUri}`);
+      return undefined;
+    }
     return sourceUri ? {
       sourceUri,
       altText: image.altText || 'Question image',

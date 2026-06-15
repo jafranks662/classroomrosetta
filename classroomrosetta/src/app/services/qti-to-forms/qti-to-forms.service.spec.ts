@@ -159,6 +159,23 @@ describe('QtiToFormsService', () => {
     expect(parsed.warnings[0]).toContain('Skipped inaccessible Canvas image');
   });
 
+  it('does not pass unresolved private Canvas image URLs to Google Forms', () => {
+    const formItem = (service as any).toFormItem({
+      kind: 'question',
+      title: 'Private image',
+      image: {
+        source: 'https://canvas.instructure.com/assessment_questions/384672544/files/312938842/download?verifier=expired',
+        altText: 'Q221_N6DV1Q_file_0.png'
+      },
+      question: {
+        required: true,
+        textQuestion: {paragraph: true}
+      }
+    }, new Map());
+
+    expect(formItem.questionItem.image).toBeUndefined();
+  });
+
   it('converts duplicate Canvas placeholder answers into a paragraph response', () => {
     const qti = `<?xml version="1.0"?>
       <questestinterop><assessment><section><item title="Lab response">
