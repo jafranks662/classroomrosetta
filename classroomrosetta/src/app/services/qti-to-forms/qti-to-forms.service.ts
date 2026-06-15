@@ -260,19 +260,29 @@ export class QtiToFormsService {
       const usableOptions = options.filter(option => option.value || option.image);
       if (usableOptions.length === 0) return null;
 
+      if (this.arePlaceholderOnlyOptions(usableOptions)) {
+        warnings.push(
+          `Converted "${title}" to a paragraph response because Canvas exported only duplicate placeholder answers.`
+        );
+        const question = this.textQuestion(true, points);
+        delete question.grading;
+        return {kind: 'question', title, question};
+      }
+
+      const uniqueOptions = this.makeOptionValuesUnique(usableOptions, title, warnings);
       const choiceType = questionType === 'multiple_answers_question'
         ? 'CHECKBOX'
         : (questionType === 'multiple_dropdowns_question' || questionType === 'matching_question')
           ? 'DROP_DOWN'
           : 'RADIO';
       const correctIds = this.findCorrectAnswerIdentifiers(item, responseId);
-      const correctValues = usableOptions
+      const correctValues = uniqueOptions
         .filter(option => correctIds.includes(option.identifier))
         .map(option => option.value);
-      const formOptions: Option[] = usableOptions.map(option => ({value: option.value || 'Image option'}));
+      const formOptions: Option[] = uniqueOptions.map(option => ({value: option.value}));
       const optionImages = new Map<string, ImageReference>();
-      usableOptions.forEach(option => {
-        if (option.image) optionImages.set(option.value || 'Image option', option.image);
+      uniqueOptions.forEach(option => {
+        if (option.image) optionImages.set(option.value, option.image);
       });
 
       const question: Question = {
@@ -306,6 +316,41 @@ export class QtiToFormsService {
       return {kind: 'question', title, question};
     }
     return null;
+  }
+
+  private arePlaceholderOnlyOptions(options: ParsedOption[]): boolean {
+    if (options.length < 2 || options.some(option => option.image)) return false;
+    const normalizedValues = options.map(option => this.cleanText(option.value).toLowerCase());
+    return new Set(normalizedValues).size === 1 &&
+      /^(no answer text provided\.?|option \d+|image option)$/i.test(normalizedValues[0]);
+  }
+
+  private makeOptionValuesUnique(
+    options: ParsedOption[],
+    questionTitle: string,
+    warnings: string[]
+  ): ParsedOption[] {
+    const counts = new Map<string, number>();
+    const totals = new Map<string, number>();
+    options.forEach(option => {
+      const key = this.cleanText(option.value).toLowerCase();
+      totals.set(key, (totals.get(key) || 0) + 1);
+    });
+
+    let changed = false;
+    const uniqueOptions = options.map(option => {
+      const key = this.cleanText(option.value).toLowerCase();
+      const occurrence = (counts.get(key) || 0) + 1;
+      counts.set(key, occurrence);
+      if ((totals.get(key) || 0) < 2) return option;
+      changed = true;
+      return {...option, value: `${option.value} (Choice ${occurrence})`};
+    });
+
+    if (changed) {
+      warnings.push(`Added choice numbers to duplicate answers in "${questionTitle}" so Google Forms can accept them.`);
+    }
+    return uniqueOptions;
   }
 
   private parseChoice(

@@ -109,4 +109,64 @@ describe('QtiToFormsService', () => {
     expect(formItem.questionItem.question.choiceQuestion.options[0].image.properties.alignment).toBe('LEFT');
   });
 
+  it('converts duplicate Canvas placeholder answers into a paragraph response', () => {
+    const qti = `<?xml version="1.0"?>
+      <questestinterop><assessment><section><item title="Lab response">
+        <itemmetadata><qtimetadata>
+          <qtimetadatafield><fieldlabel>question_type</fieldlabel><fieldentry>multiple_choice_question</fieldentry></qtimetadatafield>
+          <qtimetadatafield><fieldlabel>points_possible</fieldlabel><fieldentry>1</fieldentry></qtimetadatafield>
+        </qtimetadata></itemmetadata>
+        <presentation>
+          <material><mattext texttype="text/html">&lt;p&gt;Record your lab observations.&lt;/p&gt;</mattext></material>
+          <response_lid ident="response1"><render_choice>
+            <response_label ident="a"><material><mattext>No answer text provided.</mattext></material></response_label>
+            <response_label ident="b"><material><mattext>No answer text provided.</mattext></material></response_label>
+            <response_label ident="c"><material><mattext>No answer text provided.</mattext></material></response_label>
+          </render_choice></response_lid>
+        </presentation>
+      </item></section></assessment></questestinterop>`;
+
+    const parsed = (service as any).parseCanvasQti(
+      {name: 'lab/assessment_qti.xml', data: qti, mimeType: 'text/xml'},
+      []
+    );
+
+    expect(parsed.items.length).toBe(1);
+    expect(parsed.items[0].question.textQuestion.paragraph).toBeTrue();
+    expect(parsed.items[0].question.choiceQuestion).toBeUndefined();
+    expect(parsed.items[0].question.grading).toBeUndefined();
+    expect(parsed.warnings[0]).toContain('duplicate placeholder answers');
+  });
+
+  it('numbers repeated choice labels while preserving the correct answer', () => {
+    const qti = `<?xml version="1.0"?>
+      <questestinterop><assessment><section><item title="Repeated labels">
+        <itemmetadata><qtimetadata><qtimetadatafield>
+          <fieldlabel>question_type</fieldlabel><fieldentry>multiple_choice_question</fieldentry>
+        </qtimetadatafield></qtimetadata></itemmetadata>
+        <presentation>
+          <material><mattext>Choose one.</mattext></material>
+          <response_lid ident="response1"><render_choice>
+            <response_label ident="a"><material><mattext>Same</mattext></material></response_label>
+            <response_label ident="b"><material><mattext>Same</mattext></material></response_label>
+            <response_label ident="c"><material><mattext>Different</mattext></material></response_label>
+          </render_choice></response_lid>
+        </presentation>
+        <resprocessing><respcondition><conditionvar><varequal respident="response1">b</varequal></conditionvar><setvar>100</setvar></respcondition></resprocessing>
+      </item></section></assessment></questestinterop>`;
+
+    const parsed = (service as any).parseCanvasQti(
+      {name: 'quiz/assessment_qti.xml', data: qti, mimeType: 'text/xml'},
+      []
+    );
+    const question = parsed.items[0].question;
+
+    expect(question.choiceQuestion.options.map((option: any) => option.value)).toEqual([
+      'Same (Choice 1)',
+      'Same (Choice 2)',
+      'Different'
+    ]);
+    expect(question.grading.correctAnswers.answers[0].value).toBe('Same (Choice 2)');
+  });
+
 });
