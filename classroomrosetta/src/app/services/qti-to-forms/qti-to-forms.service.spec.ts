@@ -79,6 +79,55 @@ describe('QtiToFormsService', () => {
     expect(parsed.items[1].question.grading.correctAnswers.answers[0].value).toBe('D');
   });
 
+  it('finds dropdown responses nested inside Canvas presentation containers', () => {
+    const qti = `<?xml version="1.0"?>
+      <questestinterop>
+        <assessment title="Nested dropdown quiz">
+          <section>
+            <item ident="item1" title="Nested dropdowns">
+              <itemmetadata><qtimetadata>
+                <qtimetadatafield><fieldlabel>question_type</fieldlabel><fieldentry>multiple_dropdowns_question</fieldentry></qtimetadatafield>
+                <qtimetadatafield><fieldlabel>points_possible</fieldlabel><fieldentry>4</fieldentry></qtimetadatafield>
+              </qtimetadata></itemmetadata>
+              <presentation>
+                <material><mattext texttype="text/html">&lt;p&gt;Complete [CLOZE_01] and [CLOZE_02].&lt;/p&gt;</mattext></material>
+                <flow>
+                  <response_lid ident="response_CLOZE_01"><material><mattext>CLOZE_01</mattext></material><render_choice>
+                    <response_label ident="a"><material><mattext>Asexual</mattext></material></response_label>
+                    <response_label ident="b"><material><mattext>Sexual</mattext></material></response_label>
+                  </render_choice></response_lid>
+                  <response_lid ident="response_CLOZE_02"><material><mattext>CLOZE_02</mattext></material><render_choice>
+                    <response_label ident="c"><material><mattext>Mitosis</mattext></material></response_label>
+                    <response_label ident="d"><material><mattext>Meiosis</mattext></material></response_label>
+                  </render_choice></response_lid>
+                </flow>
+              </presentation>
+              <resprocessing>
+                <respcondition><conditionvar><varequal respident="response_CLOZE_01">b</varequal></conditionvar><setvar>100</setvar></respcondition>
+                <respcondition><conditionvar><varequal respident="response_CLOZE_02">d</varequal></conditionvar><setvar>100</setvar></respcondition>
+              </resprocessing>
+            </item>
+          </section>
+        </assessment>
+      </questestinterop>`;
+
+    const parsed = (service as any).parseCanvasQti(
+      {name: 'quiz/assessment_qti.xml', data: qti, mimeType: 'text/xml'},
+      []
+    );
+
+    expect(parsed.items.length).toBe(2);
+    expect(parsed.items[0].question.choiceQuestion.type).toBe('DROP_DOWN');
+    expect(parsed.items[0].question.grading.pointValue).toBe(1);
+    expect(parsed.items[1].question.grading.pointValue).toBe(1);
+    expect(parsed.items[0].question.grading.correctAnswers.answers[0].value).toBe('Sexual');
+    expect(parsed.items[1].question.grading.correctAnswers.answers[0].value).toBe('Meiosis');
+  });
+
+  it('versions the QTI Form cache key so parser fixes regenerate Forms', () => {
+    expect((service as any).getFormCacheKey('assignment-123')).toBe('qti-forms-v4|assignment-123');
+  });
+
   it('preserves images embedded in answer choices', () => {
     const qti = `<?xml version="1.0"?>
       <questestinterop><assessment><section><item>

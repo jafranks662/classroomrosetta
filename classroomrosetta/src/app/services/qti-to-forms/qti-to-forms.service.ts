@@ -74,6 +74,7 @@ interface ParsedQuiz {
 })
 export class QtiToFormsService {
   private readonly APP_PROPERTY_KEY = 'imsccIdentifier';
+  private readonly FORM_CONVERSION_VERSION = 'qti-forms-v4';
   private readonly MAX_REQUESTS_PER_BATCH = 100;
 
   private http = inject(HttpClient);
@@ -102,7 +103,7 @@ export class QtiToFormsService {
       return throwError(() => error);
     }
 
-    return from(this.utils.generateHash(itemId)).pipe(
+    return from(this.utils.generateHash(this.getFormCacheKey(itemId))).pipe(
       switchMap(hashedItemId => this.findExistingForm(parentFolderId, hashedItemId).pipe(
         switchMap(existing => {
           if (existing) {
@@ -191,9 +192,7 @@ export class QtiToFormsService {
         return;
       }
 
-      const responses = Array.from(presentation.children).filter(element =>
-        element.localName === 'response_lid' || element.localName === 'response_str'
-      );
+      const responses = this.getPresentationResponses(presentation);
       if (responses.length === 0) {
         items.push({
           kind: 'question',
@@ -252,6 +251,16 @@ export class QtiToFormsService {
     const base = cleanPrompt || cleanFallback || `Question ${itemIndex + 1}`;
     const preferred = !fallbackIsGeneric && cleanPrompt.length > 180 ? cleanFallback : base;
     return this.truncateText(preferred, 120) || `Question ${itemIndex + 1}`;
+  }
+
+  private getFormCacheKey(itemId: string): string {
+    return `${this.FORM_CONVERSION_VERSION}|${itemId}`;
+  }
+
+  private getPresentationResponses(presentation: Element): Element[] {
+    return Array.from(presentation.getElementsByTagName('*')).filter(element =>
+      element.localName === 'response_lid' || element.localName === 'response_str'
+    );
   }
 
   private buildPromptDescription(promptText: string, promptLabel: string): string | undefined {
