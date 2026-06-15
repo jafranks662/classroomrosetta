@@ -408,15 +408,19 @@ export class QtiToFormsService {
   ): {text: string; images: ImageReference[]} {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html || '', 'text/html');
-    const images = Array.from(doc.querySelectorAll('img')).map(img => {
+    const images = Array.from(doc.querySelectorAll('img')).map((img): ImageReference | null => {
       const source = img.getAttribute('src') || '';
       const altText = img.getAttribute('alt') || 'Question image';
-      const file = this.resolvePackageImage(source, qtiFilePath, fileIndex);
+      const file = this.resolvePackageImage(source, qtiFilePath, fileIndex, altText);
+      if (!file && source && this.isPrivateCanvasImageUrl(source)) {
+        warnings.push(`Skipped inaccessible Canvas image not found in package: ${altText}`);
+        return null;
+      }
       if (!file && source && !/^https?:\/\//i.test(source)) {
         warnings.push(`Image not found in package: ${source}`);
       }
-      return {source, altText, file};
-    }).filter(image => image.source);
+      return {source, altText, ...(file ? {file} : {})};
+    }).filter((image): image is ImageReference => image !== null && !!image.source);
 
     doc.querySelectorAll('img').forEach(img => img.remove());
     return {
@@ -441,9 +445,15 @@ export class QtiToFormsService {
   private resolvePackageImage(
     source: string,
     qtiFilePath: string,
-    fileIndex: Map<string, ImsccFile>
+    fileIndex: Map<string, ImsccFile>,
+    altText?: string
   ): ImsccFile | undefined {
-    if (!source || /^https?:\/\//i.test(source)) return undefined;
+    if (!source) return undefined;
+    if (/^https?:\/\//i.test(source)) {
+      if (!this.isPrivateCanvasImageUrl(source)) return undefined;
+      const altBasename = this.normalizePackagePath(altText || '').split('/').pop();
+      return altBasename ? fileIndex.get(`basename:${altBasename}`) : undefined;
+    }
     let path = source.split(/[?#]/)[0];
     let fromRoot = false;
     if (path.startsWith('$IMS-CC-FILEBASE$')) {
@@ -465,6 +475,17 @@ export class QtiToFormsService {
       if (exact) return exact;
     }
     return fileIndex.get(`basename:${decoded.split('/').pop() || decoded}`);
+  }
+
+  private isPrivateCanvasImageUrl(source: string): boolean {
+    try {
+      const url = new URL(source);
+      return /(^|\.)instructure\.com$/i.test(url.hostname) &&
+        (/\/assessment_questions\/.*\/files\/\d+\/download/i.test(url.pathname) ||
+          /\/api\/v1\/.*\/files\/\d+/i.test(url.pathname));
+    } catch {
+      return false;
+    }
   }
 
   private normalizePackagePath(path: string): string {

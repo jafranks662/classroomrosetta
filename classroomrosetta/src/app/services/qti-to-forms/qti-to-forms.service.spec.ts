@@ -109,6 +109,56 @@ describe('QtiToFormsService', () => {
     expect(formItem.questionItem.question.choiceQuestion.options[0].image.properties.alignment).toBe('LEFT');
   });
 
+  it('resolves private Canvas image URLs from the exported image filename', () => {
+    const qti = `<?xml version="1.0"?>
+      <questestinterop><assessment><section><item>
+        <itemmetadata><qtimetadata><qtimetadatafield>
+          <fieldlabel>question_type</fieldlabel><fieldentry>multiple_choice_question</fieldentry>
+        </qtimetadatafield></qtimetadata></itemmetadata>
+        <presentation>
+          <material><mattext texttype="text/html">&lt;p&gt;Compare the methods.&lt;/p&gt;&lt;img src="https://canvas.instructure.com/assessment_questions/384672544/files/312938842/download?verifier=secret" alt="Q221_N6DV1Q_file_0.png"&gt;</mattext></material>
+          <response_lid ident="response1"><render_choice>
+            <response_label ident="a"><material><mattext>Asexual</mattext></material></response_label>
+            <response_label ident="b"><material><mattext>Sexual</mattext></material></response_label>
+          </render_choice></response_lid>
+        </presentation>
+      </item></section></assessment></questestinterop>`;
+    const image = {
+      name: 'assessment_questions/Q221_N6DV1Q_file_0.png',
+      data: new ArrayBuffer(1),
+      mimeType: 'image/png'
+    };
+
+    const parsed = (service as any).parseCanvasQti(
+      {name: 'quiz/assessment_qti.xml', data: qti, mimeType: 'text/xml'},
+      [image]
+    );
+
+    expect(parsed.items[0].image.file).toBe(image);
+    expect(parsed.warnings.length).toBe(0);
+  });
+
+  it('skips private Canvas images when the export has no local copy', () => {
+    const qti = `<?xml version="1.0"?>
+      <questestinterop><assessment><section><item>
+        <itemmetadata><qtimetadata><qtimetadatafield>
+          <fieldlabel>question_type</fieldlabel><fieldentry>essay_question</fieldentry>
+        </qtimetadatafield></qtimetadata></itemmetadata>
+        <presentation>
+          <material><mattext texttype="text/html">&lt;p&gt;Explain.&lt;/p&gt;&lt;img src="https://canvas.instructure.com/assessment_questions/1/files/2/download?verifier=expired" alt="missing.png"&gt;</mattext></material>
+          <response_str ident="response1"/>
+        </presentation>
+      </item></section></assessment></questestinterop>`;
+
+    const parsed = (service as any).parseCanvasQti(
+      {name: 'quiz/assessment_qti.xml', data: qti, mimeType: 'text/xml'},
+      []
+    );
+
+    expect(parsed.items[0].image).toBeUndefined();
+    expect(parsed.warnings[0]).toContain('Skipped inaccessible Canvas image');
+  });
+
   it('converts duplicate Canvas placeholder answers into a paragraph response', () => {
     const qti = `<?xml version="1.0"?>
       <questestinterop><assessment><section><item title="Lab response">
