@@ -125,7 +125,50 @@ describe('QtiToFormsService', () => {
   });
 
   it('versions the QTI Form cache key so parser fixes regenerate Forms', () => {
-    expect((service as any).getFormCacheKey('assignment-123')).toBe('qti-forms-v5|assignment-123');
+    expect((service as any).getFormCacheKey('assignment-123')).toBe('qti-forms-v6|assignment-123');
+  });
+
+  it('uses the richer same-title QTI file when the selected resource is incomplete', () => {
+    const shortQti = `<?xml version="1.0"?>
+      <questestinterop><assessment title="8.2 Practice - Complete Dominance"><section>
+        <item title="Short item">
+          <itemmetadata><qtimetadata><qtimetadatafield>
+            <fieldlabel>question_type</fieldlabel><fieldentry>multiple_choice_question</fieldentry>
+          </qtimetadatafield></qtimetadata></itemmetadata>
+          <presentation><material><mattext>Short prompt.</mattext></material>
+            <response_lid ident="response1"><render_choice>
+              <response_label ident="a"><material><mattext>A</mattext></material></response_label>
+              <response_label ident="b"><material><mattext>B</mattext></material></response_label>
+            </render_choice></response_lid>
+          </presentation>
+        </item>
+      </section></assessment></questestinterop>`;
+    const richQti = `<?xml version="1.0"?>
+      <questestinterop><assessment title="8.2 Practice - Complete Dominance"><section>
+        <item title="Dropdown item">
+          <itemmetadata><qtimetadata><qtimetadatafield>
+            <fieldlabel>question_type</fieldlabel><fieldentry>multiple_dropdowns_question</fieldentry>
+          </qtimetadatafield></qtimetadata></itemmetadata>
+          <presentation><material><mattext>Complete [CLOZE_01] and [CLOZE_02].</mattext></material>
+            <response_lid ident="response_CLOZE_01"><material><mattext>CLOZE_01</mattext></material><render_choice>
+              <response_label ident="a"><material><mattext>AA</mattext></material></response_label>
+              <response_label ident="b"><material><mattext>Aa</mattext></material></response_label>
+            </render_choice></response_lid>
+            <response_lid ident="response_CLOZE_02"><material><mattext>CLOZE_02</mattext></material><render_choice>
+              <response_label ident="c"><material><mattext>aa</mattext></material></response_label>
+              <response_label ident="d"><material><mattext>BB</mattext></material></response_label>
+            </render_choice></response_lid>
+          </presentation>
+        </item>
+      </section></assessment></questestinterop>`;
+    const selected = {name: 'short/assessment_qti.xml', data: shortQti, mimeType: 'text/xml'};
+    const richer = {name: 'rich/assessment_qti.xml', data: richQti, mimeType: 'text/xml'};
+
+    const candidate = (service as any).selectBestQtiCandidate(selected, [selected, richer], '8.2 Practice - Complete Dominance');
+
+    expect(candidate.file).toBe(richer);
+    expect(candidate.stats.questionCount).toBe(2);
+    expect(candidate.stats.dropdownCount).toBe(2);
   });
 
   it('preserves images embedded in answer choices', () => {

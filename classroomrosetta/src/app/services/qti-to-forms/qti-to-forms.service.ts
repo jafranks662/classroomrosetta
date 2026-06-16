@@ -76,12 +76,19 @@ interface FormConversionStats {
   dropdownCount: number;
 }
 
+interface ParsedQtiCandidate {
+  file: ImsccFile;
+  parsedQuiz: ParsedQuiz;
+  title: string;
+  stats: FormConversionStats;
+}
+
 @Injectable({
   providedIn: 'root'
 })
 export class QtiToFormsService {
   private readonly APP_PROPERTY_KEY = 'imsccIdentifier';
-  private readonly FORM_CONVERSION_VERSION = 'qti-forms-v5';
+  private readonly FORM_CONVERSION_VERSION = 'qti-forms-v6';
   private readonly MAX_REQUESTS_PER_BATCH = 100;
 
   private http = inject(HttpClient);
@@ -105,7 +112,12 @@ export class QtiToFormsService {
 
     let parsedQuiz: ParsedQuiz;
     try {
-      parsedQuiz = this.parseCanvasQti(qtiFile, allPackageFiles);
+      const qtiCandidate = this.selectBestQtiCandidate(qtiFile, allPackageFiles, formTitle);
+      parsedQuiz = qtiCandidate.parsedQuiz;
+      if (qtiCandidate.file.name !== qtiFile.name) {
+        console.warn(`[QTI Service] Using richer QTI source for "${formTitle}": ${qtiCandidate.file.name}`, qtiCandidate.stats);
+        parsedQuiz.warnings.push(`Used richer matching QTI source: ${qtiCandidate.file.name}`);
+      }
     } catch (error) {
       return throwError(() => error);
     }
@@ -159,6 +171,96 @@ export class QtiToFormsService {
         ));
       })
     );
+  }
+
+  private selectBestQtiCandidate(
+    qtiFile: ImsccFile,
+    allPackageFiles: ImsccFile[],
+    formTitle: string
+  ): ParsedQtiCandidate {
+    const primary = this.toParsedQtiCandidate(qtiFile, allPackageFiles, formTitle);
+    const normalizedTargetTitle = this.normalizeTitleForMatch(primary.title || formTitle);
+    const candidates = allPackageFiles
+      .filter(file => file !== qtiFile && this.isLikelyQtiXml(file))
+      .map(file => ({file, title: this.extractQtiAssessmentTitle(file) || ''}))
+      .filter(candidate => this.normalizeTitleForMatch(candidate.title) === normalizedTargetTitle)
+      .map(candidate => this.tryParsedQtiCandidate(candidate.file, allPackageFiles, candidate.title || formTitle))
+      .filter((candidate): candidate is ParsedQtiCandidate => !!candidate)
+      .filter(candidate => this.normalizeTitleForMatch(candidate.title) === normalizedTargetTitle);
+
+    return [primary, ...candidates].reduce((best, candidate) =>
+      this.compareQtiCandidates(candidate, best) > 0 ? candidate : best
+    );
+  }
+
+  private toParsedQtiCandidate(
+    file: ImsccFile,
+    allPackageFiles: ImsccFile[],
+    fallbackTitle: string
+  ): ParsedQtiCandidate {
+    const parsedQuiz = this.parseCanvasQti(file, allPackageFiles);
+    const title = this.extractQtiAssessmentTitle(file) || fallbackTitle;
+    return {
+      file,
+      parsedQuiz,
+      title,
+      stats: this.getParsedQuizStats(parsedQuiz)
+    };
+  }
+
+  private tryParsedQtiCandidate(
+    file: ImsccFile,
+    allPackageFiles: ImsccFile[],
+    fallbackTitle: string
+  ): ParsedQtiCandidate | null {
+    try {
+      return this.toParsedQtiCandidate(file, allPackageFiles, fallbackTitle);
+    } catch {
+      return null;
+    }
+  }
+
+  private isLikelyQtiXml(file: ImsccFile): boolean {
+    if (!file?.data || typeof file.data !== 'string') return false;
+    const name = file.name?.toLowerCase() || '';
+    if (!name.endsWith('.xml') && file.mimeType !== 'text/xml' && file.mimeType !== 'application/xml') return false;
+    return /<questestinterop\b|<assessment\b/i.test(file.data);
+  }
+
+  private extractQtiAssessmentTitle(file: ImsccFile): string | null {
+    if (!file?.data || typeof file.data !== 'string') return null;
+    try {
+      const doc = new DOMParser().parseFromString(file.data, 'application/xml');
+      if (doc.querySelector('parsererror')) return null;
+      const assessment = Array.from(doc.getElementsByTagName('*'))
+        .find(element => element.localName === 'assessment');
+      return assessment?.getAttribute('title')?.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private normalizeTitleForMatch(title: string): string {
+    return this.cleanText(title)
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private getParsedQuizStats(parsedQuiz: ParsedQuiz): FormConversionStats {
+    const questionItems = parsedQuiz.items.filter(item => !!item.question);
+    return {
+      itemCount: parsedQuiz.items.length,
+      questionCount: questionItems.length,
+      totalPoints: questionItems.reduce((total, item) => total + (item.question?.grading?.pointValue || 0), 0),
+      dropdownCount: questionItems.filter(item => item.question?.choiceQuestion?.type === 'DROP_DOWN').length
+    };
+  }
+
+  private compareQtiCandidates(candidate: ParsedQtiCandidate, best: ParsedQtiCandidate): number {
+    const candidateScore = candidate.stats.questionCount + candidate.stats.dropdownCount * 2;
+    const bestScore = best.stats.questionCount + best.stats.dropdownCount * 2;
+    return candidateScore - bestScore;
   }
 
   private parseCanvasQti(qtiFile: ImsccFile, allPackageFiles: ImsccFile[]): ParsedQuiz {
