@@ -849,7 +849,10 @@ export class FileUploadComponent {
         // Add the Google Form (from QTI) if it was created
         if (result.createdForm?.form?.formUrl) {
           updatedItem.materials.push({
-            link: {url: result.createdForm.form.formUrl, title: result.createdForm.form.title || result.assignmentName}
+            form: {
+              formUrl: result.createdForm.form.formUrl,
+              title: result.createdForm.form.title || result.assignmentName
+            }
           });
         }
 

@@ -69,12 +69,19 @@ interface ParsedQuiz {
   warnings: string[];
 }
 
+interface FormConversionStats {
+  itemCount: number;
+  questionCount: number;
+  totalPoints: number;
+  dropdownCount: number;
+}
+
 @Injectable({
   providedIn: 'root'
 })
 export class QtiToFormsService {
   private readonly APP_PROPERTY_KEY = 'imsccIdentifier';
-  private readonly FORM_CONVERSION_VERSION = 'qti-forms-v4';
+  private readonly FORM_CONVERSION_VERSION = 'qti-forms-v5';
   private readonly MAX_REQUESTS_PER_BATCH = 100;
 
   private http = inject(HttpClient);
@@ -119,9 +126,11 @@ export class QtiToFormsService {
           return this.uploadAndHostImages(imageFiles, parentFolderId).pipe(
             switchMap(hostedImages => {
               const requests = this.buildFormRequests(parsedQuiz.items, hostedImages);
-              const description = this.buildFormDescription(parsedQuiz.description, parsedQuiz.warnings);
+              const expectedStats = this.getFormRequestStats(requests);
+              console.log(`[QTI Service] Prepared "${formTitle}" for Forms:`, expectedStats);
+              const description = this.buildFormDescription(parsedQuiz.description, parsedQuiz.warnings, expectedStats);
 
-              return this.createAndPopulateForm(formTitle, description, requests).pipe(
+              return this.createAndPopulateForm(formTitle, description, requests, expectedStats).pipe(
                 switchMap(form => this.moveAndTagForm(form, parentFolderId, hashedItemId)),
                 switchMap(form => this.releaseHostedImages(hostedImages).pipe(map(() => form))),
                 catchError(error => this.releaseHostedImages(hostedImages).pipe(
@@ -612,6 +621,29 @@ export class QtiToFormsService {
     });
   }
 
+  private getFormRequestStats(requests: FormRequest[]): FormConversionStats {
+    const formItems = requests
+      .map(request => request.createItem?.item)
+      .filter((item): item is FormItem => !!item);
+    const questionItems = formItems.filter(item => !!item.questionItem?.question);
+    return this.getFormItemStats(formItems, questionItems);
+  }
+
+  private getFormItemStats(
+    formItems: FormItem[],
+    questionItems = formItems.filter(item => !!item.questionItem?.question)
+  ): FormConversionStats {
+    return {
+      itemCount: formItems.length,
+      questionCount: questionItems.length,
+      totalPoints: questionItems.reduce((total, item) =>
+        total + (item.questionItem?.question?.grading?.pointValue || 0), 0),
+      dropdownCount: questionItems.filter(item =>
+        item.questionItem?.question?.choiceQuestion?.type === 'DROP_DOWN'
+      ).length
+    };
+  }
+
   private toFormItem(
     item: ParsedFormItem,
     hostedImages: Map<string, HostedImage>
@@ -664,7 +696,8 @@ export class QtiToFormsService {
   private createAndPopulateForm(
     title: string,
     description: string,
-    itemRequests: FormRequest[]
+    itemRequests: FormRequest[],
+    expectedStats: FormConversionStats
   ): Observable<GoogleForm> {
     const headers = this.createHeaders();
     if (!headers) return throwError(() => new Error('Authentication token missing for Forms API.'));
@@ -690,9 +723,40 @@ export class QtiToFormsService {
           } as FormRequest] : []),
           ...itemRequests
         ];
-        return this.sendFormRequestChunks(form.formId, requests).pipe(map(() => form));
+        return this.sendFormRequestChunks(form.formId, requests).pipe(
+          switchMap(() => this.verifyCreatedForm(form.formId, expectedStats)),
+          map(() => form)
+        );
       }),
       switchMap(form => this.publishForm(form).pipe(map(() => form)))
+    );
+  }
+
+  private verifyCreatedForm(formId: string, expectedStats: FormConversionStats): Observable<void> {
+    const headers = this.createHeaders();
+    if (!headers) return throwError(() => new Error('Authentication token missing for Forms verification.'));
+    const url = `${this.utils.FORMS_API_GET_BASE_ENDPOINT}${formId}`;
+    const params = new HttpParams()
+      .set('fields', 'items(title,questionItem(question(choiceQuestion(type),grading(pointValue))))');
+    return this.http.get<GoogleForm>(url, {headers, params}).pipe(
+      map(form => {
+        const actualStats = this.getFormItemStats(form.items || []);
+        console.log(`[QTI Service] Verified Form ${formId}:`, {expectedStats, actualStats});
+        const mismatches = [
+          actualStats.questionCount === expectedStats.questionCount
+            ? null
+            : `questions expected ${expectedStats.questionCount}, got ${actualStats.questionCount}`,
+          actualStats.dropdownCount === expectedStats.dropdownCount
+            ? null
+            : `dropdowns expected ${expectedStats.dropdownCount}, got ${actualStats.dropdownCount}`,
+          actualStats.totalPoints === expectedStats.totalPoints
+            ? null
+            : `points expected ${expectedStats.totalPoints}, got ${actualStats.totalPoints}`
+        ].filter((message): message is string => !!message);
+        if (mismatches.length) {
+          throw new Error(`Forms verification failed after creation: ${mismatches.join('; ')}.`);
+        }
+      })
     );
   }
 
@@ -808,12 +872,17 @@ export class QtiToFormsService {
     return `${cleanedPrompt} (${readableMarker})`.trim();
   }
 
-  private buildFormDescription(description: string, warnings: string[]): string {
+  private buildFormDescription(description: string, warnings: string[], stats: FormConversionStats): string {
+    const summaryText = [
+      'Conversion summary:',
+      `- Generated ${stats.questionCount} quiz question(s), including ${stats.dropdownCount} dropdown question(s).`,
+      `- Total quiz points: ${stats.totalPoints}.`
+    ].join('\n');
     const uniqueWarnings = Array.from(new Set(warnings));
     const warningText = uniqueWarnings.length
       ? `\n\nConversion notes:\n${uniqueWarnings.map(warning => `- ${warning}`).join('\n')}`
       : '';
-    return `${description}${warningText}`.trim();
+    return `${description ? `${description}\n\n` : ''}${summaryText}${warningText}`.trim();
   }
 
   private cleanText(value: string): string {

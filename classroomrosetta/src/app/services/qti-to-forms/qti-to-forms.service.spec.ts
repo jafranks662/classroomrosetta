@@ -125,7 +125,7 @@ describe('QtiToFormsService', () => {
   });
 
   it('versions the QTI Form cache key so parser fixes regenerate Forms', () => {
-    expect((service as any).getFormCacheKey('assignment-123')).toBe('qti-forms-v4|assignment-123');
+    expect((service as any).getFormCacheKey('assignment-123')).toBe('qti-forms-v5|assignment-123');
   });
 
   it('preserves images embedded in answer choices', () => {
