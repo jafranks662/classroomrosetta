@@ -309,6 +309,17 @@ export class ConverterService {
     return /\b(?:question|quiz|test)\s+banks?\b|\bbanks?\b/i.test(title || '');
   }
 
+  private extractAssessmentTitleSafe(resource: Element): string | null {
+    try {
+      const title = this.extractStandaloneResourceTitle(resource);
+      return title && title !== 'Untitled Resource' ? title : null;
+    } catch (error) {
+      console.warn('Could not extract assessment title from resource metadata:', error);
+    }
+
+    return this.extractTitleFromResourceFile(resource);
+  }
+
   private processImsccItemsStream(
     items: Element[],
     parentTopic?: string
@@ -335,8 +346,11 @@ export class ConverterService {
               Array.from(this.manifestXmlDoc?.getElementsByTagName('resource') || []).find(r => r.getAttribute('identifier') === identifierRef);
 
             if (resource) {
-              const resolvedTopic = this.resolveCourseworkTopic(parentTopic, rawTitle);
-              resourceObservable = this.processResource(resource, rawTitle, identifier, resolvedTopic);
+              const qtiAssessmentTitle = this.isQtiResource(resource) ? this.extractAssessmentTitleSafe(resource) : null;
+              const isQuestionBank = this.isQuestionBankTitle(rawTitle) || this.isQuestionBankTitle(qtiAssessmentTitle || '');
+              const resolvedTopic = isQuestionBank ? 'Question Banks' : this.resolveCourseworkTopic(parentTopic, rawTitle);
+              const processedTitle = isQuestionBank && qtiAssessmentTitle ? qtiAssessmentTitle : rawTitle;
+              resourceObservable = this.processResource(resource, processedTitle, identifier, resolvedTopic);
             } else {
               console.warn(`   Resource not found for identifierref: ${identifierRef} (Item: "${rawTitle}"). This item might be a folder or a broken link.`);
               this.skippedItemLog.push({id: identifier, title: rawTitle, reason: `Resource not found for ref: ${identifierRef}`});
