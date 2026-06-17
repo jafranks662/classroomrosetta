@@ -130,7 +130,7 @@ export class ClassroomService {
       processedItem.processingError = undefined;
       console.log(`${itemLogPrefix} Parsed Success (Status ${statusCode}). ID: ${responseJson.id}, Link: ${responseJson.alternateLink}`);
     } else {
-      const apiErrorMessage = responseJson.error?.message || statusText || 'Unknown error in sub-response.';
+      const apiErrorMessage = this.extractClassroomApiErrorMessage(responseJson, statusText);
       console.warn(`${itemLogPrefix} Parsed Failure (Status ${statusCode}). API Error: "${apiErrorMessage}"`);
       processedItem.processingError = {
         message: `Batch item failed: ${apiErrorMessage} (Status: ${statusCode})`,
@@ -139,6 +139,22 @@ export class ClassroomService {
       };
     }
   };
+
+  private extractClassroomApiErrorMessage(responseJson: any, statusText: string): string {
+    const error = responseJson?.error || responseJson || {};
+    const baseMessage = error.message || statusText || 'Unknown error in sub-response.';
+    const fieldViolations = (error.details || [])
+      .flatMap((detail: any) => detail.fieldViolations || detail.violations || [])
+      .map((violation: any) => {
+        const field = violation.field || violation.subject || '';
+        const description = violation.description || violation.reason || '';
+        if (!description) return '';
+        return field ? `${field}: ${description}` : description;
+      })
+      .filter((message: string) => !!message);
+
+    return fieldViolations.length ? `${baseMessage}: ${fieldViolations.join('; ')}` : baseMessage;
+  }
 
   /**
    * Assigns content to multiple classrooms. Token is fetched internally.

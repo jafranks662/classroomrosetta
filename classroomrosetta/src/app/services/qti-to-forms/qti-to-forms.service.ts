@@ -67,6 +67,7 @@ interface ParsedQuiz {
   description: string;
   items: ParsedFormItem[];
   warnings: string[];
+  sourceBankRefs: string[];
 }
 
 interface FormConversionStats {
@@ -83,12 +84,26 @@ interface ParsedQtiCandidate {
   stats: FormConversionStats;
 }
 
+interface ParseCanvasQtiOptions {
+  firstItemPerQuestionGroup?: boolean;
+  fallbackWarning?: string;
+}
+
+interface QtiSourceSummary {
+  file: ImsccFile;
+  title: string;
+  itemCount: number;
+  questionGroupCount: number;
+  relatedTitleScore: number;
+  score: number;
+}
+
 @Injectable({
   providedIn: 'root'
 })
 export class QtiToFormsService {
   private readonly APP_PROPERTY_KEY = 'imsccIdentifier';
-  private readonly FORM_CONVERSION_VERSION = 'qti-forms-v6';
+  private readonly FORM_CONVERSION_VERSION = 'qti-forms-v7';
   private readonly MAX_REQUESTS_PER_BATCH = 100;
 
   private http = inject(HttpClient);
@@ -188,17 +203,29 @@ export class QtiToFormsService {
       .filter((candidate): candidate is ParsedQtiCandidate => !!candidate)
       .filter(candidate => this.normalizeTitleForMatch(candidate.title) === normalizedTargetTitle);
 
-    return [primary, ...candidates].reduce((best, candidate) =>
+    const best = [primary, ...candidates].reduce((best, candidate) =>
       this.compareQtiCandidates(candidate, best) > 0 ? candidate : best
     );
+
+    if (best.stats.questionCount > 0) return best;
+
+    if (primary.parsedQuiz.sourceBankRefs.length > 0) {
+      const bankCandidate = this.findRelatedQuestionBankCandidate(primary, allPackageFiles, formTitle);
+      if (bankCandidate?.stats.questionCount) return bankCandidate;
+
+      throw new Error(this.buildUnresolvedSourceBankMessage(primary));
+    }
+
+    return best;
   }
 
   private toParsedQtiCandidate(
     file: ImsccFile,
     allPackageFiles: ImsccFile[],
-    fallbackTitle: string
+    fallbackTitle: string,
+    options: ParseCanvasQtiOptions = {}
   ): ParsedQtiCandidate {
-    const parsedQuiz = this.parseCanvasQti(file, allPackageFiles);
+    const parsedQuiz = this.parseCanvasQti(file, allPackageFiles, options);
     const title = this.extractQtiAssessmentTitle(file) || fallbackTitle;
     return {
       file,
@@ -211,13 +238,98 @@ export class QtiToFormsService {
   private tryParsedQtiCandidate(
     file: ImsccFile,
     allPackageFiles: ImsccFile[],
-    fallbackTitle: string
+    fallbackTitle: string,
+    options: ParseCanvasQtiOptions = {}
   ): ParsedQtiCandidate | null {
     try {
-      return this.toParsedQtiCandidate(file, allPackageFiles, fallbackTitle);
+      return this.toParsedQtiCandidate(file, allPackageFiles, fallbackTitle, options);
     } catch {
       return null;
     }
+  }
+
+  private findRelatedQuestionBankCandidate(
+    primary: ParsedQtiCandidate,
+    allPackageFiles: ImsccFile[],
+    formTitle: string
+  ): ParsedQtiCandidate | null {
+    const targetTitle = primary.title || formTitle;
+    const sourceGroupCount = primary.parsedQuiz.sourceBankRefs.length;
+    const summaries = allPackageFiles
+      .filter(file => file !== primary.file && this.isLikelyQtiXml(file))
+      .map(file => this.toQtiSourceSummary(file, targetTitle, sourceGroupCount))
+      .filter((summary): summary is QtiSourceSummary => !!summary)
+      .filter(summary => summary.itemCount > 0 && summary.relatedTitleScore > 0)
+      .sort((a, b) => b.score - a.score);
+
+    const best = summaries[0];
+    if (!best || best.score < 25) return null;
+
+    const useQuestionGroups = best.questionGroupCount > 0;
+    const fallbackWarning = best.questionGroupCount === sourceGroupCount
+      ? `Canvas exported this quiz as ${sourceGroupCount} random question-bank group(s). Google Forms cannot reproduce Canvas random bank draws, so this conversion used the first question from each matching group in "${best.title}".`
+      : `Canvas exported this quiz as ${sourceGroupCount} question-bank reference(s), but those bank IDs were not included in the quiz QTI. Used related QTI source "${best.title}" as a fallback; review the Form before publishing.`;
+
+    return this.toParsedQtiCandidate(best.file, allPackageFiles, best.title || formTitle, {
+      firstItemPerQuestionGroup: useQuestionGroups,
+      fallbackWarning
+    });
+  }
+
+  private toQtiSourceSummary(
+    file: ImsccFile,
+    targetTitle: string,
+    sourceGroupCount: number
+  ): QtiSourceSummary | null {
+    if (!file?.data || typeof file.data !== 'string') return null;
+    try {
+      const doc = new DOMParser().parseFromString(file.data, 'application/xml');
+      if (doc.querySelector('parsererror')) return null;
+      const title = this.extractQtiAssessmentTitle(file) || '';
+      const itemCount = doc.getElementsByTagName('item').length;
+      const questionGroupCount = this.getQuestionGroupSections(doc)
+        .filter(section => this.getDirectChildItems(section).length > 0)
+        .length;
+      const relatedTitleScore = this.scoreRelatedTitle(targetTitle, title);
+      const score = relatedTitleScore +
+        (questionGroupCount === sourceGroupCount ? 100 : 0) +
+        (/\b(?:quiz|test)\s+bank\b|\bbank\b/i.test(title) ? 20 : 0) +
+        Math.min(itemCount, 50) / 10;
+      return {file, title, itemCount, questionGroupCount, relatedTitleScore, score};
+    } catch {
+      return null;
+    }
+  }
+
+  private scoreRelatedTitle(targetTitle: string, candidateTitle: string): number {
+    const targetKeywords = this.getTitleKeywords(targetTitle);
+    const candidateKeywords = this.getTitleKeywords(candidateTitle);
+    if (targetKeywords.size === 0 || candidateKeywords.size === 0) return 0;
+    const overlap = Array.from(targetKeywords).filter(keyword => candidateKeywords.has(keyword)).length;
+    if (overlap === 0) return 0;
+    const coverage = overlap / targetKeywords.size;
+    return overlap * 10 + Math.round(coverage * 10);
+  }
+
+  private getTitleKeywords(title: string): Set<string> {
+    const stopWords = new Set([
+      'and', 'the', 'for', 'with', 'from', 'into', 'quiz', 'quizzes', 'practice',
+      'practices', 'test', 'tests', 'bank', 'unit', 'term', 'module', 'bio',
+      'biology', 'lab', 'labs', 'review', 'preview', 'assessment', 'assessments'
+    ]);
+    const normalized = this.cleanText(title)
+      .toLowerCase()
+      .replace(/\b\d+[a-z]?(?:\.\d+)*\b/g, ' ');
+    return new Set(normalized
+      .split(/[^a-z0-9]+/)
+      .filter(token => token.length > 2 && !stopWords.has(token)));
+  }
+
+  private buildUnresolvedSourceBankMessage(candidate: ParsedQtiCandidate): string {
+    const refs = candidate.parsedQuiz.sourceBankRefs;
+    const sampleRefs = refs.slice(0, 5).join(', ');
+    const suffix = refs.length > 5 ? ', ...' : '';
+    return `Canvas exported "${candidate.title}" as ${refs.length} question-bank reference(s), but the IMSCC did not include the concrete questions for those bank IDs. No Google Form was created for this quiz. Re-export the Canvas quiz with item banks included, or convert the matching quiz bank separately. Bank refs: ${sampleRefs}${suffix}.`;
   }
 
   private isLikelyQtiXml(file: ImsccFile): boolean {
@@ -263,7 +375,11 @@ export class QtiToFormsService {
     return candidateScore - bestScore;
   }
 
-  private parseCanvasQti(qtiFile: ImsccFile, allPackageFiles: ImsccFile[]): ParsedQuiz {
+  private parseCanvasQti(
+    qtiFile: ImsccFile,
+    allPackageFiles: ImsccFile[],
+    options: ParseCanvasQtiOptions = {}
+  ): ParsedQuiz {
     const parser = new DOMParser();
     const doc = parser.parseFromString(qtiFile.data as string, 'application/xml');
     const parseError = doc.querySelector('parsererror');
@@ -276,8 +392,14 @@ export class QtiToFormsService {
     const items: ParsedFormItem[] = [];
     const assessmentMeta = this.findAssessmentMetadata(qtiFile.name, allPackageFiles);
     const description = assessmentMeta ? this.extractQuizDescription(assessmentMeta) : '';
+    const sourceBankRefs = this.getSourceBankRefs(doc);
+    if (options.fallbackWarning) warnings.push(options.fallbackWarning);
 
-    Array.from(doc.getElementsByTagName('item')).forEach((item, itemIndex) => {
+    const qtiItems = options.firstItemPerQuestionGroup
+      ? this.selectFirstItemsFromQuestionGroups(doc)
+      : Array.from(doc.getElementsByTagName('item'));
+
+    qtiItems.forEach((item, itemIndex) => {
       const questionType = this.getMetadataValue(item, 'question_type') || 'unknown';
       const sourcePoints = this.parsePoints(this.getMetadataValue(item, 'points_possible'));
       const promptElement = item.querySelector('presentation > material > mattext');
@@ -350,9 +472,51 @@ export class QtiToFormsService {
     });
 
     if (items.length === 0) {
+      if (sourceBankRefs.length > 0) {
+        warnings.push(`Canvas exported ${sourceBankRefs.length} question-bank reference(s), but no concrete questions were found in this QTI file.`);
+      }
       warnings.push('No convertible questions were found in this quiz.');
     }
-    return {description, items, warnings};
+    return {description, items, warnings, sourceBankRefs};
+  }
+
+  private getSourceBankRefs(doc: XMLDocument): string[] {
+    const refs = Array.from(doc.getElementsByTagName('*'))
+      .filter(element => element.localName === 'sourcebank_ref')
+      .map(element => this.cleanText(element.textContent || ''))
+      .filter(ref => !!ref);
+    return Array.from(new Set(refs));
+  }
+
+  private selectFirstItemsFromQuestionGroups(doc: XMLDocument): Element[] {
+    const selected: Element[] = [];
+    this.getQuestionGroupSections(doc).forEach(section => {
+      const selectionCount = this.parseSelectionNumber(section);
+      const directItems = this.getDirectChildItems(section);
+      selected.push(...directItems.slice(0, selectionCount));
+    });
+    return selected.length ? selected : Array.from(doc.getElementsByTagName('item'));
+  }
+
+  private getQuestionGroupSections(doc: XMLDocument): Element[] {
+    return Array.from(doc.getElementsByTagName('*')).filter(element =>
+      element.localName === 'section' &&
+      Array.from(element.getElementsByTagName('*')).some(child => child.localName === 'selection_number')
+    );
+  }
+
+  private getDirectChildItems(section: Element): Element[] {
+    return Array.from(section.children).filter((child): child is Element =>
+      child instanceof Element && child.localName === 'item'
+    );
+  }
+
+  private parseSelectionNumber(section: Element): number {
+    const value = Array.from(section.getElementsByTagName('*'))
+      .find(element => element.localName === 'selection_number')
+      ?.textContent;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.max(1, Math.round(parsed)) : 1;
   }
 
   private buildPromptLabel(promptText: string, fallbackTitle: string, itemIndex: number): string {

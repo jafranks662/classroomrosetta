@@ -125,7 +125,7 @@ describe('QtiToFormsService', () => {
   });
 
   it('versions the QTI Form cache key so parser fixes regenerate Forms', () => {
-    expect((service as any).getFormCacheKey('assignment-123')).toBe('qti-forms-v6|assignment-123');
+    expect((service as any).getFormCacheKey('assignment-123')).toBe('qti-forms-v7|assignment-123');
   });
 
   it('uses the richer same-title QTI file when the selected resource is incomplete', () => {
@@ -169,6 +169,78 @@ describe('QtiToFormsService', () => {
     expect(candidate.file).toBe(richer);
     expect(candidate.stats.questionCount).toBe(2);
     expect(candidate.stats.dropdownCount).toBe(2);
+  });
+
+  it('uses a related quiz bank when Canvas exports only sourcebank references', () => {
+    const bankOnlyQti = `<?xml version="1.0"?>
+      <questestinterop><assessment title="1.1 Practice - Characteristics of Life"><section>
+        <section title="Group 1"><selection_ordering><selection>
+          <sourcebank_ref>bank-ref-1</sourcebank_ref>
+          <selection_number>1</selection_number>
+        </selection></selection_ordering></section>
+        <section title="Group 2"><selection_ordering><selection>
+          <sourcebank_ref>bank-ref-2</sourcebank_ref>
+          <selection_number>1</selection_number>
+        </selection></selection_ordering></section>
+      </section></assessment></questestinterop>`;
+    const relatedBankQti = `<?xml version="1.0"?>
+      <questestinterop><assessment title="1A1 Quiz Bank - Characteristics of Life"><section>
+        <section title="cells"><selection_ordering><selection><selection_number>1</selection_number></selection></selection_ordering>
+          <item title="First cell question">
+            <itemmetadata><qtimetadata><qtimetadatafield>
+              <fieldlabel>question_type</fieldlabel><fieldentry>multiple_choice_question</fieldentry>
+            </qtimetadatafield></qtimetadata></itemmetadata>
+            <presentation><material><mattext>First cell prompt.</mattext></material>
+              <response_lid ident="response1"><render_choice>
+                <response_label ident="a"><material><mattext>Cell</mattext></material></response_label>
+                <response_label ident="b"><material><mattext>Atom</mattext></material></response_label>
+              </render_choice></response_lid>
+            </presentation>
+          </item>
+          <item title="Alternate cell question">
+            <presentation><material><mattext>Alternate cell prompt.</mattext></material></presentation>
+          </item>
+        </section>
+        <section title="energy"><selection_ordering><selection><selection_number>1</selection_number></selection></selection_ordering>
+          <item title="First energy question">
+            <itemmetadata><qtimetadata><qtimetadatafield>
+              <fieldlabel>question_type</fieldlabel><fieldentry>multiple_choice_question</fieldentry>
+            </qtimetadatafield></qtimetadata></itemmetadata>
+            <presentation><material><mattext>First energy prompt.</mattext></material>
+              <response_lid ident="response1"><render_choice>
+                <response_label ident="a"><material><mattext>Food</mattext></material></response_label>
+                <response_label ident="b"><material><mattext>Rock</mattext></material></response_label>
+              </render_choice></response_lid>
+            </presentation>
+          </item>
+        </section>
+      </section></assessment></questestinterop>`;
+    const selected = {name: 'practice/assessment_qti.xml', data: bankOnlyQti, mimeType: 'text/xml'};
+    const related = {name: 'bank/assessment_qti.xml', data: relatedBankQti, mimeType: 'text/xml'};
+
+    const candidate = (service as any).selectBestQtiCandidate(selected, [selected, related], '1.1 Practice - Characteristics of Life');
+
+    expect(candidate.file).toBe(related);
+    expect(candidate.stats.questionCount).toBe(2);
+    expect(candidate.parsedQuiz.items.map((item: any) => item.title)).toEqual([
+      'First cell prompt.',
+      'First energy prompt.'
+    ]);
+    expect(candidate.parsedQuiz.warnings[0]).toContain('random question-bank group');
+  });
+
+  it('throws a clear error when sourcebank references cannot be resolved', () => {
+    const bankOnlyQti = `<?xml version="1.0"?>
+      <questestinterop><assessment title="Mystery Practice"><section>
+        <section title="Group"><selection_ordering><selection>
+          <sourcebank_ref>missing-bank-ref</sourcebank_ref>
+          <selection_number>1</selection_number>
+        </selection></selection_ordering></section>
+      </section></assessment></questestinterop>`;
+    const selected = {name: 'practice/assessment_qti.xml', data: bankOnlyQti, mimeType: 'text/xml'};
+
+    expect(() => (service as any).selectBestQtiCandidate(selected, [selected], 'Mystery Practice'))
+      .toThrowError(/question-bank reference/);
   });
 
   it('preserves images embedded in answer choices', () => {
