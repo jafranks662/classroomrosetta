@@ -23,7 +23,7 @@
       [indeterminate]="isIndeterminate"
       (change)="toggleAllSelection()"
       aria-label="Select all coursework items">
-      Select All Assignments
+      Select All Items
     </mat-checkbox>
 
     <app-classroom-multiselect
@@ -75,7 +75,7 @@
                     } @else {
                       <div class="item-checkbox-placeholder"></div>
                     }
-                    <strong class="item-title">{{ item.title || 'Untitled Assignment' }}</strong>
+                    <strong class="item-title">{{ item.title || 'Untitled Item' }}</strong>
                     <span class="item-type">
                       @if (item.qtiFile && item.qtiFile.length > 0) {
                         (GOOGLE FORM QUIZ)

@@ -292,6 +292,8 @@ export class ConverterService {
   }
 
   private inferStandaloneAssessmentTopic(title: string): string {
+    if (this.isQuestionBankTitle(title)) return 'Question Banks';
+
     const unitMatch = title.match(/^\*?\s*(?:unit\s*)?(\d+)(?:\.\d+)*\b/i);
     const unitPrefix = unitMatch ? `Unit ${Number(unitMatch[1])}` : 'Uncategorized';
 
@@ -301,6 +303,10 @@ export class ConverterService {
     if (/\btest\b/i.test(title)) return `${unitPrefix} - TESTS`;
     if (/\bcase study\b/i.test(title)) return `${unitPrefix} - CASE STUDIES`;
     return `${unitPrefix} - ASSESSMENTS`;
+  }
+
+  private isQuestionBankTitle(title: string): boolean {
+    return /\b(?:question|quiz|test)\s+banks?\b|\bbanks?\b/i.test(title || '');
   }
 
   private processImsccItemsStream(

@@ -335,7 +335,7 @@ export class FileUploadComponent {
             JSON.stringify(updatedAssignmentsForClassroom[0].descriptionForClassroom, null, 2));
         }
 
-        this.loadingMessage = `Submitting ${updatedAssignmentsForClassroom.length} assignment(s) to ${selectedContent.classroomIds.length} classroom(s)... This may take some time.`;
+        this.loadingMessage = `Submitting ${updatedAssignmentsForClassroom.length} item(s) to ${selectedContent.classroomIds.length} classroom(s)... This may take some time.`;
         this.changeDetectorRef.markForCheck();
 
         // Stage 2: Call ClassroomService.

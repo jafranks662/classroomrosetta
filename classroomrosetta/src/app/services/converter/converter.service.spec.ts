@@ -112,6 +112,47 @@ describe('ConverterService', () => {
     });
   });
 
+  it('includes standalone Canvas quiz banks under a Question Banks topic', done => {
+    const manifest = `<?xml version="1.0"?>
+      <manifest>
+        <organizations><organization>
+          <item identifier="module"><title>Term 1 (1st - 3rd 9 Weeks)</title>
+            <item identifier="quiz-item" identifierref="quiz1"><title>1.1 Practice - Characteristics of Life</title></item>
+          </item>
+        </organization></organizations>
+        <resources>
+          <resource identifier="quiz1" type="imsqti_xmlv1p2">
+            <file href="quiz1/quiz.xml"/>
+            <dependency identifierref="quiz1-meta"/>
+          </resource>
+          <resource identifier="quiz1-meta" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="quiz1/assessment_meta.xml"/>
+          <resource identifier="bank1" type="imsqti_xmlv1p2">
+            <file href="bank1/bank.xml"/>
+            <dependency identifierref="bank1-meta"/>
+          </resource>
+          <resource identifier="bank1-meta" type="associatedcontent/imscc_xmlv1p1/learning-application-resource" href="bank1/assessment_meta.xml"/>
+        </resources>
+      </manifest>`;
+    const qti = '<questestinterop><assessment><section/></assessment></questestinterop>';
+
+    service.convertImscc([
+      {name: 'imsmanifest.xml', data: manifest, mimeType: 'text/xml'},
+      {name: 'quiz1/quiz.xml', data: qti, mimeType: 'text/xml'},
+      {name: 'quiz1/assessment_meta.xml', data: '<quiz><title>1.1 Practice - Characteristics of Life</title></quiz>', mimeType: 'text/xml'},
+      {name: 'bank1/bank.xml', data: qti, mimeType: 'text/xml'},
+      {name: 'bank1/assessment_meta.xml', data: '<quiz><title>1A1 Quiz Bank - Characteristics of Life</title></quiz>', mimeType: 'text/xml'}
+    ]).pipe(toArray()).subscribe({
+      next: items => {
+        const bank = items.find(item => item.title === '1A1 Quiz Bank - Characteristics of Life');
+        expect(bank).toBeTruthy();
+        expect(bank?.associatedWithDeveloper?.topic).toBe('Question Banks');
+        expect(bank?.qtiFile?.[0].name).toBe('bank1/bank.xml');
+        done();
+      },
+      error: done.fail
+    });
+  });
+
   it('does not expose Canvas quiz image resources as standalone coursework', done => {
     const manifest = `<?xml version="1.0"?>
       <manifest>
