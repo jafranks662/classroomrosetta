@@ -35,7 +35,7 @@ describe('QtiToFormsService', () => {
     service = TestBed.inject(QtiToFormsService);
   });
 
-  it('splits Canvas compound questions into one-point questions and resolves prompt images', () => {
+  it('converts Canvas dropdown questions into one multiple-choice grid and resolves prompt images', () => {
     const qti = `<?xml version="1.0"?>
       <questestinterop>
         <assessment title="Compound quiz">
@@ -70,13 +70,15 @@ describe('QtiToFormsService', () => {
       [image]
     );
 
-    expect(parsed.items.length).toBe(2);
-    expect(parsed.items[0].question.choiceQuestion.type).toBe('DROP_DOWN');
-    expect(parsed.items[0].question.grading.pointValue).toBe(1);
-    expect(parsed.items[1].question.grading.pointValue).toBe(1);
+    expect(parsed.items.length).toBe(1);
+    expect(parsed.items[0].questionGroup.grid.columns.type).toBe('RADIO');
+    expect(parsed.items[0].questionGroup.grid.columns.options.map((option: any) => option.value)).toEqual(['A', 'B', 'C', 'D']);
+    expect(parsed.items[0].questionGroup.questions.map((question: any) => question.rowQuestion.title)).toEqual(['Blank 01', 'Blank 02']);
+    expect(parsed.items[0].questionGroup.questions[0].grading.pointValue).toBe(1);
+    expect(parsed.items[0].questionGroup.questions[1].grading.pointValue).toBe(1);
     expect(parsed.items[0].image.file).toBe(image);
-    expect(parsed.items[0].question.grading.correctAnswers.answers[0].value).toBe('B');
-    expect(parsed.items[1].question.grading.correctAnswers.answers[0].value).toBe('D');
+    expect(parsed.items[0].questionGroup.questions[0].grading.correctAnswers.answers[0].value).toBe('B');
+    expect(parsed.items[0].questionGroup.questions[1].grading.correctAnswers.answers[0].value).toBe('D');
   });
 
   it('finds dropdown responses nested inside Canvas presentation containers', () => {
@@ -116,16 +118,17 @@ describe('QtiToFormsService', () => {
       []
     );
 
-    expect(parsed.items.length).toBe(2);
-    expect(parsed.items[0].question.choiceQuestion.type).toBe('DROP_DOWN');
-    expect(parsed.items[0].question.grading.pointValue).toBe(1);
-    expect(parsed.items[1].question.grading.pointValue).toBe(1);
-    expect(parsed.items[0].question.grading.correctAnswers.answers[0].value).toBe('Sexual');
-    expect(parsed.items[1].question.grading.correctAnswers.answers[0].value).toBe('Meiosis');
+    expect(parsed.items.length).toBe(1);
+    expect(parsed.items[0].questionGroup.grid.columns.type).toBe('RADIO');
+    expect(parsed.items[0].questionGroup.questions.length).toBe(2);
+    expect(parsed.items[0].questionGroup.questions[0].grading.pointValue).toBe(1);
+    expect(parsed.items[0].questionGroup.questions[1].grading.pointValue).toBe(1);
+    expect(parsed.items[0].questionGroup.questions[0].grading.correctAnswers.answers[0].value).toBe('Sexual');
+    expect(parsed.items[0].questionGroup.questions[1].grading.correctAnswers.answers[0].value).toBe('Meiosis');
   });
 
   it('versions the QTI Form cache key so parser fixes regenerate Forms', () => {
-    expect((service as any).getFormCacheKey('assignment-123')).toBe('qti-forms-v8|assignment-123');
+    expect((service as any).getFormCacheKey('assignment-123')).toBe('qti-forms-v9|assignment-123');
   });
 
   it('uses the richer same-title QTI file when the selected resource is incomplete', () => {
@@ -168,7 +171,8 @@ describe('QtiToFormsService', () => {
 
     expect(candidate.file).toBe(richer);
     expect(candidate.stats.questionCount).toBe(2);
-    expect(candidate.stats.dropdownCount).toBe(2);
+    expect(candidate.stats.dropdownCount).toBe(0);
+    expect(candidate.stats.gridCount).toBe(1);
   });
 
   it('uses a related quiz bank when Canvas exports only sourcebank references', () => {
@@ -421,15 +425,15 @@ describe('QtiToFormsService', () => {
 
     expect(parsed.items[0].title.length).toBeLessThanOrEqual(120);
     expect(parsed.items[0].description.length).toBeGreaterThan(parsed.items[0].title.length);
-    expect(parsed.items[0].question.choiceQuestion.type).toBe('DROP_DOWN');
-    expect(parsed.items[0].question.grading.pointValue).toBe(1);
+    expect(parsed.items[0].questionGroup.grid.columns.type).toBe('RADIO');
+    expect(parsed.items[0].questionGroup.questions[0].grading.pointValue).toBe(1);
   });
 
   it('trims long conversion notes before sending the Form description', () => {
     const description = (service as any).buildFormDescription(
       '',
       Array.from({length: 200}, (_, index) => `Image warning ${index}: ${'details '.repeat(10)}`),
-      {itemCount: 200, questionCount: 200, totalPoints: 200, dropdownCount: 50}
+      {itemCount: 200, questionCount: 200, totalPoints: 200, dropdownCount: 50, gridCount: 25}
     );
 
     expect(description.length).toBeLessThanOrEqual(4000);

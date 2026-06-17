@@ -29,6 +29,7 @@ import {
   Image as FormsImage,
   Option,
   Question,
+  QuestionGroupItem,
   SetPublishSettingsRequest,
 } from '../../interfaces/forms-interface';
 import {AuthService} from '../auth/auth.service';
@@ -52,6 +53,7 @@ interface ParsedFormItem {
   title: string;
   description?: string;
   question?: Question;
+  questionGroup?: QuestionGroupItem;
   image?: ImageReference;
   optionImages?: Map<string, ImageReference>;
 }
@@ -75,6 +77,7 @@ interface FormConversionStats {
   questionCount: number;
   totalPoints: number;
   dropdownCount: number;
+  gridCount: number;
 }
 
 interface ParsedQtiCandidate {
@@ -103,7 +106,7 @@ interface QtiSourceSummary {
 })
 export class QtiToFormsService {
   private readonly APP_PROPERTY_KEY = 'imsccIdentifier';
-  private readonly FORM_CONVERSION_VERSION = 'qti-forms-v8';
+  private readonly FORM_CONVERSION_VERSION = 'qti-forms-v9';
   private readonly MAX_REQUESTS_PER_BATCH = 100;
   private readonly MAX_FORM_ITEM_TITLE_LENGTH = 120;
   private readonly MAX_FORM_DESCRIPTION_LENGTH = 4000;
@@ -363,17 +366,21 @@ export class QtiToFormsService {
 
   private getParsedQuizStats(parsedQuiz: ParsedQuiz): FormConversionStats {
     const questionItems = parsedQuiz.items.filter(item => !!item.question);
+    const gridItems = parsedQuiz.items.filter(item => !!item.questionGroup);
     return {
       itemCount: parsedQuiz.items.length,
-      questionCount: questionItems.length,
-      totalPoints: questionItems.reduce((total, item) => total + (item.question?.grading?.pointValue || 0), 0),
-      dropdownCount: questionItems.filter(item => item.question?.choiceQuestion?.type === 'DROP_DOWN').length
+      questionCount: questionItems.length + gridItems.reduce((total, item) => total + (item.questionGroup?.questions.length || 0), 0),
+      totalPoints: questionItems.reduce((total, item) => total + (item.question?.grading?.pointValue || 0), 0) +
+        gridItems.reduce((total, item) => total + (item.questionGroup?.questions || [])
+          .reduce((rowTotal, question) => rowTotal + (question.grading?.pointValue || 0), 0), 0),
+      dropdownCount: questionItems.filter(item => item.question?.choiceQuestion?.type === 'DROP_DOWN').length,
+      gridCount: gridItems.length
     };
   }
 
   private compareQtiCandidates(candidate: ParsedQtiCandidate, best: ParsedQtiCandidate): number {
-    const candidateScore = candidate.stats.questionCount + candidate.stats.dropdownCount * 2;
-    const bestScore = best.stats.questionCount + best.stats.dropdownCount * 2;
+    const candidateScore = candidate.stats.questionCount + candidate.stats.dropdownCount * 2 + candidate.stats.gridCount * 2;
+    const bestScore = best.stats.questionCount + best.stats.dropdownCount * 2 + best.stats.gridCount * 2;
     return candidateScore - bestScore;
   }
 
@@ -442,6 +449,27 @@ export class QtiToFormsService {
         questionType === 'multiple_dropdowns_question' ||
         questionType === 'fill_in_multiple_blanks_question' ||
         questionType === 'matching_question';
+
+      if (questionType === 'multiple_dropdowns_question' || questionType === 'matching_question') {
+        const gridItem = this.parseGridQuestion(
+          item,
+          responses,
+          questionType,
+          promptLabel,
+          promptDescription,
+          qtiFile.name,
+          fileIndex,
+          warnings
+        );
+
+        if (gridItem) {
+          gridItem.image = prompt.images[0];
+          items.push(gridItem);
+          return;
+        }
+
+        warnings.push(`Converted "${fallbackTitle}" by separating rows because a clean grid could not be created.`);
+      }
 
       responses.forEach((response, responseIndex) => {
         const responseId = response.getAttribute('ident') || `response_${responseIndex + 1}`;
@@ -628,6 +656,97 @@ export class QtiToFormsService {
       return {kind: 'question', title, question};
     }
     return null;
+  }
+
+  private parseGridQuestion(
+    item: Element,
+    responses: Element[],
+    questionType: string,
+    title: string,
+    description: string | undefined,
+    qtiFilePath: string,
+    fileIndex: Map<string, ImsccFile>,
+    warnings: string[]
+  ): ParsedFormItem | null {
+    const gridRows = responses.map((response, responseIndex) => {
+      const responseId = response.getAttribute('ident') || `response_${responseIndex + 1}`;
+      const labelElement = response.querySelector(':scope > material > mattext');
+      const responseLabel = this.cleanText(labelElement?.textContent || '');
+      const renderChoice = response.querySelector('render_choice');
+      if (!renderChoice) return null;
+      const options = Array.from(renderChoice.querySelectorAll('response_label')).map((choice, index) =>
+        this.parseChoice(choice, index, qtiFilePath, fileIndex, warnings)
+      );
+      const usableOptions = options.filter(option => option.value || option.image);
+      if (usableOptions.length === 0) return null;
+      return {
+        responseId,
+        title: this.buildGridRowTitle(responseLabel, responseId, responseIndex),
+        options: usableOptions,
+        shuffle: renderChoice.getAttribute('shuffle') === 'yes'
+      };
+    });
+
+    if (gridRows.some(row => !row)) return null;
+    const rows = gridRows.filter((row): row is NonNullable<typeof row> => !!row);
+    if (rows.length === 0) return null;
+
+    const allOptions = rows.flatMap(row => row.options);
+    if (allOptions.some(option => option.image)) {
+      warnings.push(`Image answer choices in "${title}" were converted to text-only grid columns; review this grid in Google Forms.`);
+    }
+    const optionValues: string[] = [];
+    const optionValueKeys = new Set<string>();
+    const optionByResponseAndId = new Map<string, string>();
+    let mergedDuplicateChoices = false;
+    rows.forEach(row => {
+      row.options.forEach(option => {
+        const key = this.cleanText(option.value).toLowerCase();
+        if (optionValueKeys.has(key)) {
+          mergedDuplicateChoices = true;
+        } else {
+          optionValueKeys.add(key);
+          optionValues.push(option.value);
+        }
+        optionByResponseAndId.set(`${row.responseId}::${option.identifier}`, optionValues.find(value =>
+          this.cleanText(value).toLowerCase() === key
+        ) || option.value);
+      });
+    });
+    if (mergedDuplicateChoices) {
+      warnings.push(`Merged duplicate grid choices in "${title}" so Google Forms can accept the grid.`);
+    }
+    const questions: Question[] = rows.map(row => {
+      const correctValues = this.findCorrectAnswerIdentifiers(item, row.responseId)
+        .map(identifier => optionByResponseAndId.get(`${row.responseId}::${identifier}`))
+        .filter((value): value is string => !!value);
+      return {
+        required: true,
+        rowQuestion: {title: row.title},
+        grading: {
+          pointValue: 1,
+          ...(correctValues.length > 0
+            ? {correctAnswers: {answers: correctValues.map(value => ({value}))}}
+            : {})
+        }
+      };
+    });
+
+    const questionGroup: QuestionGroupItem = {
+      questions,
+      grid: {
+        columns: {
+          type: 'RADIO',
+          options: optionValues.map(value => ({value})),
+          shuffle: rows.some(row => row.shuffle)
+        }
+      }
+    };
+
+    warnings.push(
+      `Converted ${questionType === 'matching_question' ? 'matching' : 'dropdown'} question "${title}" to a multiple-choice grid so teachers can edit the rows and choices later.`
+    );
+    return {kind: 'question', title, description, questionGroup};
   }
 
   private arePlaceholderOnlyOptions(options: ParsedOption[]): boolean {
@@ -901,14 +1020,19 @@ export class QtiToFormsService {
     formItems: FormItem[],
     questionItems = formItems.filter(item => !!item.questionItem?.question)
   ): FormConversionStats {
+    const gridItems = formItems.filter(item => !!item.questionGroupItem);
     return {
       itemCount: formItems.length,
-      questionCount: questionItems.length,
+      questionCount: questionItems.length + gridItems.reduce((total, item) =>
+        total + (item.questionGroupItem?.questions.length || 0), 0),
       totalPoints: questionItems.reduce((total, item) =>
-        total + (item.questionItem?.question?.grading?.pointValue || 0), 0),
+        total + (item.questionItem?.question?.grading?.pointValue || 0), 0) +
+        gridItems.reduce((total, item) => total + (item.questionGroupItem?.questions || [])
+          .reduce((rowTotal, question) => rowTotal + (question.grading?.pointValue || 0), 0), 0),
       dropdownCount: questionItems.filter(item =>
         item.questionItem?.question?.choiceQuestion?.type === 'DROP_DOWN'
-      ).length
+      ).length,
+      gridCount: gridItems.length
     };
   }
 
@@ -925,6 +1049,16 @@ export class QtiToFormsService {
     }
     if (item.kind === 'image') {
       return image ? {title: item.title, imageItem: {image}} : null;
+    }
+    if (item.questionGroup) {
+      return {
+        title: item.title,
+        description: item.description,
+        questionGroupItem: {
+          ...item.questionGroup,
+          image
+        }
+      };
     }
     if (!item.question) return null;
 
@@ -1005,7 +1139,7 @@ export class QtiToFormsService {
     if (!headers) return throwError(() => new Error('Authentication token missing for Forms verification.'));
     const url = `${this.utils.FORMS_API_GET_BASE_ENDPOINT}${formId}`;
     const params = new HttpParams()
-      .set('fields', 'items(title,questionItem(question(choiceQuestion(type),grading(pointValue))))');
+      .set('fields', 'items(title,questionItem(question(choiceQuestion(type),grading(pointValue))),questionGroupItem(questions(grading(pointValue)),grid(columns(type))))');
     return this.http.get<GoogleForm>(url, {headers, params}).pipe(
       map(form => {
         const actualStats = this.getFormItemStats(form.items || []);
@@ -1017,6 +1151,9 @@ export class QtiToFormsService {
           actualStats.dropdownCount === expectedStats.dropdownCount
             ? null
             : `dropdowns expected ${expectedStats.dropdownCount}, got ${actualStats.dropdownCount}`,
+          actualStats.gridCount === expectedStats.gridCount
+            ? null
+            : `grids expected ${expectedStats.gridCount}, got ${actualStats.gridCount}`,
           actualStats.totalPoints === expectedStats.totalPoints
             ? null
             : `points expected ${expectedStats.totalPoints}, got ${actualStats.totalPoints}`
@@ -1140,10 +1277,16 @@ export class QtiToFormsService {
     return this.truncateText(`${cleanedPrompt} (${readableMarker})`, this.MAX_FORM_ITEM_TITLE_LENGTH);
   }
 
+  private buildGridRowTitle(responseLabel: string, responseId: string, responseIndex: number): string {
+    const marker = responseLabel || responseId.replace(/^response_?/i, '') || `Row ${responseIndex + 1}`;
+    const readableMarker = marker.replace(/^CLOZE_/i, 'Blank ').replace(/_/g, ' ');
+    return this.truncateText(readableMarker, this.MAX_FORM_ITEM_TITLE_LENGTH) || `Row ${responseIndex + 1}`;
+  }
+
   private buildFormDescription(description: string, warnings: string[], stats: FormConversionStats): string {
     const summaryText = [
       'Conversion summary:',
-      `- Generated ${stats.questionCount} quiz question(s), including ${stats.dropdownCount} dropdown question(s).`,
+      `- Generated ${stats.questionCount} quiz question(s), including ${stats.dropdownCount} dropdown question(s) and ${stats.gridCount} grid question(s).`,
       `- Total quiz points: ${stats.totalPoints}.`
     ].join('\n');
     const uniqueWarnings = Array.from(new Set(warnings));

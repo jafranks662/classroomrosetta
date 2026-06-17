@@ -47,6 +47,7 @@ export interface FormItem {
   title?: string; // The title of the item (e.g., question text, image caption).
   description?: string; // Description text below the title.
   questionItem?: QuestionItem; // If the item is a question.
+  questionGroupItem?: QuestionGroupItem; // If the item is a grid-style question group.
   imageItem?: ImageItem; // If the item is an image.
   videoItem?: VideoItem;
   pageBreakItem?: PageBreakItem;
@@ -114,6 +115,21 @@ export interface ChoiceQuestion {
   type: 'RADIO' | 'CHECKBOX' | 'DROP_DOWN'; // Type of choice question.
   options: Option[]; // List of choices. Required.
   shuffle?: boolean; // Whether to shuffle the option order.
+}
+
+/**
+ * Defines a Google Forms question group, used for multiple-choice grids.
+ * Each question is a row, and grid.columns supplies the shared column choices.
+ */
+export interface QuestionGroupItem {
+  questions: Question[];
+  grid: Grid;
+  image?: Image;
+}
+
+export interface Grid {
+  columns: ChoiceQuestion;
+  shuffleQuestions?: boolean;
 }
 
 /**
@@ -336,11 +352,7 @@ export interface Row {
   title: string;
 }
 export interface RowQuestion {
-  rows: Row[];
-  // Columns are typically handled by a ChoiceQuestion with type GRID or CHECKBOX_GRID
-  // So, your existing ChoiceQuestion might need a 'type' like 'GRID' or 'CHECKBOX_GRID'
-  // or you define columns explicitly here if your QTI parsing separates them.
-  // For now, assuming columns are part of the choiceQuestion structure within the main Question.
+  title: string;
 }
 
 export interface Video {
