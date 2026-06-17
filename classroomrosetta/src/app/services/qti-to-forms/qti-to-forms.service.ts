@@ -103,8 +103,10 @@ interface QtiSourceSummary {
 })
 export class QtiToFormsService {
   private readonly APP_PROPERTY_KEY = 'imsccIdentifier';
-  private readonly FORM_CONVERSION_VERSION = 'qti-forms-v7';
+  private readonly FORM_CONVERSION_VERSION = 'qti-forms-v8';
   private readonly MAX_REQUESTS_PER_BATCH = 100;
+  private readonly MAX_FORM_ITEM_TITLE_LENGTH = 120;
+  private readonly MAX_FORM_DESCRIPTION_LENGTH = 4000;
 
   private http = inject(HttpClient);
   private utils = inject(UtilitiesService);
@@ -525,7 +527,7 @@ export class QtiToFormsService {
     const fallbackIsGeneric = !cleanFallback || /^question$/i.test(cleanFallback);
     const base = cleanPrompt || cleanFallback || `Question ${itemIndex + 1}`;
     const preferred = !fallbackIsGeneric && cleanPrompt.length > 180 ? cleanFallback : base;
-    return this.truncateText(preferred, 120) || `Question ${itemIndex + 1}`;
+    return this.truncateText(preferred, this.MAX_FORM_ITEM_TITLE_LENGTH) || `Question ${itemIndex + 1}`;
   }
 
   private getFormCacheKey(itemId: string): string {
@@ -541,7 +543,7 @@ export class QtiToFormsService {
   private buildPromptDescription(promptText: string, promptLabel: string): string | undefined {
     const cleanPrompt = this.cleanText(promptText);
     if (!cleanPrompt || cleanPrompt === promptLabel) return undefined;
-    return this.truncateText(cleanPrompt, 4000);
+    return this.truncateText(cleanPrompt, this.MAX_FORM_DESCRIPTION_LENGTH);
   }
 
   private truncateText(value: string, maxLength: number): string {
@@ -1135,7 +1137,7 @@ export class QtiToFormsService {
     const marker = responseLabel || responseId.replace(/^response_?/i, '') || `Part ${responseIndex + 1}`;
     const readableMarker = marker.replace(/^CLOZE_/i, 'Blank ').replace(/_/g, ' ');
     const cleanedPrompt = prompt.replace(/\[CLOZE_\d+\]/gi, '_____');
-    return `${cleanedPrompt} (${readableMarker})`.trim();
+    return this.truncateText(`${cleanedPrompt} (${readableMarker})`, this.MAX_FORM_ITEM_TITLE_LENGTH);
   }
 
   private buildFormDescription(description: string, warnings: string[], stats: FormConversionStats): string {
@@ -1148,7 +1150,10 @@ export class QtiToFormsService {
     const warningText = uniqueWarnings.length
       ? `\n\nConversion notes:\n${uniqueWarnings.map(warning => `- ${warning}`).join('\n')}`
       : '';
-    return `${description ? `${description}\n\n` : ''}${summaryText}${warningText}`.trim();
+    return this.truncateText(
+      `${description ? `${description}\n\n` : ''}${summaryText}${warningText}`.trim(),
+      this.MAX_FORM_DESCRIPTION_LENGTH
+    );
   }
 
   private cleanText(value: string): string {

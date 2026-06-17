@@ -125,7 +125,7 @@ describe('QtiToFormsService', () => {
   });
 
   it('versions the QTI Form cache key so parser fixes regenerate Forms', () => {
-    expect((service as any).getFormCacheKey('assignment-123')).toBe('qti-forms-v7|assignment-123');
+    expect((service as any).getFormCacheKey('assignment-123')).toBe('qti-forms-v8|assignment-123');
   });
 
   it('uses the richer same-title QTI file when the selected resource is incomplete', () => {
@@ -394,6 +394,46 @@ describe('QtiToFormsService', () => {
     expect(parsed.items[0].title.length).toBeLessThanOrEqual(120);
     expect(parsed.items[0].description.length).toBeGreaterThan(parsed.items[0].title.length);
     expect(parsed.items[0].question.textQuestion.paragraph).toBeTrue();
+  });
+
+  it('keeps long compound dropdown labels out of the Forms item title', () => {
+    const longPrompt = `Classify each cell-cycle checkpoint. ${'This prompt has enough detail to require the description field. '.repeat(8)}`;
+    const longBlankLabel = `CLOZE_01_${'very_long_dropdown_marker_'.repeat(8)}`;
+    const qti = `<?xml version="1.0"?>
+      <questestinterop><assessment><section><item title="Question">
+        <itemmetadata><qtimetadata>
+          <qtimetadatafield><fieldlabel>question_type</fieldlabel><fieldentry>multiple_dropdowns_question</fieldentry></qtimetadatafield>
+          <qtimetadatafield><fieldlabel>points_possible</fieldlabel><fieldentry>2</fieldentry></qtimetadatafield>
+        </qtimetadata></itemmetadata>
+        <presentation>
+          <material><mattext texttype="text/html">&lt;p&gt;${longPrompt} [CLOZE_01]&lt;/p&gt;</mattext></material>
+          <response_lid ident="response_CLOZE_01"><material><mattext>${longBlankLabel}</mattext></material><render_choice>
+            <response_label ident="a"><material><mattext>Interphase</mattext></material></response_label>
+            <response_label ident="b"><material><mattext>Mitosis</mattext></material></response_label>
+          </render_choice></response_lid>
+        </presentation>
+      </item></section></assessment></questestinterop>`;
+
+    const parsed = (service as any).parseCanvasQti(
+      {name: 'bank/assessment_qti.xml', data: qti, mimeType: 'text/xml'},
+      []
+    );
+
+    expect(parsed.items[0].title.length).toBeLessThanOrEqual(120);
+    expect(parsed.items[0].description.length).toBeGreaterThan(parsed.items[0].title.length);
+    expect(parsed.items[0].question.choiceQuestion.type).toBe('DROP_DOWN');
+    expect(parsed.items[0].question.grading.pointValue).toBe(1);
+  });
+
+  it('trims long conversion notes before sending the Form description', () => {
+    const description = (service as any).buildFormDescription(
+      '',
+      Array.from({length: 200}, (_, index) => `Image warning ${index}: ${'details '.repeat(10)}`),
+      {itemCount: 200, questionCount: 200, totalPoints: 200, dropdownCount: 50}
+    );
+
+    expect(description.length).toBeLessThanOrEqual(4000);
+    expect(description).toContain('Conversion summary:');
   });
 
   it('numbers repeated choice labels while preserving the correct answer', () => {
