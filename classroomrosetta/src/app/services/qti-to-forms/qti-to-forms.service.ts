@@ -106,7 +106,7 @@ interface QtiSourceSummary {
 })
 export class QtiToFormsService {
   private readonly APP_PROPERTY_KEY = 'imsccIdentifier';
-  private readonly FORM_CONVERSION_VERSION = 'qti-forms-v9';
+  private readonly FORM_CONVERSION_VERSION = 'qti-forms-v10';
   private readonly MAX_REQUESTS_PER_BATCH = 100;
   private readonly MAX_FORM_ITEM_TITLE_LENGTH = 120;
   private readonly MAX_FORM_DESCRIPTION_LENGTH = 4000;
@@ -450,7 +450,7 @@ export class QtiToFormsService {
         questionType === 'fill_in_multiple_blanks_question' ||
         questionType === 'matching_question';
 
-      if (questionType === 'multiple_dropdowns_question' || questionType === 'matching_question') {
+      if (questionType === 'matching_question') {
         const gridItem = this.parseGridQuestion(
           item,
           responses,
